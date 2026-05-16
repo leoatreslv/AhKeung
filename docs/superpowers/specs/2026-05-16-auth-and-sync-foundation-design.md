@@ -31,7 +31,7 @@ These were agreed during brainstorming and are not revisited in this document.
 | Offline | Members work fully offline. Trainer reads of other members' data (spec #2) require online. |
 | Local data migration | None. Pre-launch. Existing Dexie data is wiped on first login. |
 | Sync model | Local-first. Dexie is the local source of truth; a queue pushes writes; a pull merges remote changes. |
-| Conflict resolution | Last-write-wins by `updated_at`. Single writer per row in practice. |
+| Conflict resolution | Optimistic-concurrency push (`update ... where updated_at = $expected`), pull-and-replay on conflict, dead-letter for 4xx/repeated conflicts. Effectively last-writer-wins by *server arrival order*, never client clock. |
 | PWA | Stays a PWA. Service worker, manifest, install-to-home-screen all unchanged. |
 
 ## 3. Architecture
@@ -42,11 +42,12 @@ These were agreed during brainstorming and are not revisited in this document.
 ├─────────────────────────────────────────────────┤
 │  Hooks  (useAuth NEW, useExercises, useFavorites)│  +1 hook
 ├─────────────────────────────────────────────────┤
-│  Dexie  (local source of truth for reads)       │  +userId, +updatedAt
+│  Dexie  (local source of truth for reads)       │  +userId, +updatedAt, +serverVersion
 ├─────────────────────────────────────────────────┤
 │  Sync layer  src/sync/   ←  NEW                 │
-│   • pushQueue: outbound writes                  │
-│   • pull: inbound merge                         │
+│   • pushQueue: outbound writes (optimistic CC)  │
+│   • pull: inbound merge (keyset pagination)     │
+│   • deadLetter: poisoned rows                   │
 │   • mapping: snake_case ↔ camelCase             │
 ├─────────────────────────────────────────────────┤
 │  Supabase JS client  (auth + Postgres + RLS)    │  NEW
@@ -59,7 +60,29 @@ Trainer reads of *other* members' data in spec #2 will bypass Dexie and read Sup
 
 ### Key simplification
 
-Dexie holds **only the current user's data, ever**. On login we pull the user's rows. On logout (or user switch) we wipe Dexie. This means existing pages' Dexie queries need zero modification — they remain naturally scoped to "me" because that's all Dexie contains.
+Dexie holds **only the current user's data, ever**. On login we pull the user's rows. On logout (or user switch) we wipe Dexie. Existing pages' Dexie *queries* remain naturally scoped to "me" because that's all Dexie contains — no `where(userId).equals(...)` clauses needed.
+
+**What does change**: TypeScript types tighten (IDs become `string`, `userId` and `updatedAt` become required, `serverVersion` is added — see §5). Concretely this requires:
+
+- Updating `src/test/db.test.ts` (the `verno === 3` assertion and the raw `db.plans.add({...})` calls that omit the new required fields).
+- Updating `src/pages/PlanEditor.tsx`'s `Number(id)` URL parse — IDs are now UUID strings.
+- Updating any other direct `db.<table>.add()` calls to populate the new fields (or to go through `putWithSync`, which fills them).
+
+These are mechanical edits, but they exist and the spec must own them.
+
+### Service worker / PWA caching
+
+`vite-plugin-pwa`'s Workbox default can cache cross-origin GETs depending on `runtimeCaching`. A stale-while-revalidate hit against a Supabase REST URL would return cached JSON to the pull worker and silently corrupt local state. We add an explicit rule that Supabase traffic is **never** served from cache:
+
+```ts
+// vite.config.ts — within VitePWA({ workbox: { runtimeCaching: [...] } })
+{
+  urlPattern: ({ url }) => url.origin === import.meta.env.VITE_SUPABASE_URL_ORIGIN,
+  handler: 'NetworkOnly',
+}
+```
+
+Auth endpoints under `*.supabase.co/auth/v1/*` are also covered by this rule. The app shell (HTML/JS/CSS) keeps its existing cache-first behavior — that's the part that makes the PWA offline-launchable.
 
 ## 4. Data model
 
@@ -68,7 +91,7 @@ Dexie holds **only the current user's data, ever**. On login we pull the user's 
 ```sql
 create table profiles (
   id           uuid primary key references auth.users(id) on delete cascade,
-  display_name text         not null,
+  display_name text,                                       -- nullable; UI prompts user to set on first launch
   is_trainer   boolean      not null default false,
   created_at   timestamptz  not null default now()
 );
@@ -134,7 +157,7 @@ create or replace function public.handle_new_user() returns trigger
   language plpgsql security definer set search_path = public as $$
 begin
   insert into public.profiles (id, display_name, is_trainer)
-  values (NEW.id, coalesce(NEW.raw_user_meta_data->>'display_name', NEW.email), false);
+  values (NEW.id, nullif(NEW.raw_user_meta_data->>'display_name', ''), false);
   return NEW;
 end $$;
 
@@ -143,7 +166,9 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 ```
 
-Admin sets `is_trainer = true` afterwards via the dashboard. `display_name` is editable by the user in `<Settings />`.
+Admin sets `is_trainer = true` via the dashboard. `display_name` is `null` initially — the UI prompts the user to fill it on first launch. (We don't fall back to the email address because surfacing an email as a display name leaks contact info to other trainers.)
+
+The `profiles.display_name` column is nullable accordingly (already reflected in the schema above).
 
 Two changes from today's Dexie schema:
 
@@ -168,6 +193,20 @@ create or replace function public.is_trainer() returns boolean
     select coalesce((select is_trainer from profiles where id = auth.uid()), false)
   $$;
 
+revoke execute on function public.is_trainer() from public;
+grant  execute on function public.is_trainer() to authenticated;
+
+-- Read-only view: trainer display names, visible to every authenticated user.
+-- Lets a member see "Assigned by trainer Bob" on a plan without granting
+-- read access to the full profiles row. Used in spec #2.
+-- security_invoker=off so the view bypasses the stricter profiles RLS for this
+-- narrow projection (id + display_name only). This is the one deliberate
+-- relaxation; the rest of profiles stays strictly self-only-for-members.
+create or replace view public.trainer_names with (security_invoker = off) as
+  select id, display_name from public.profiles where is_trainer = true;
+
+grant select on public.trainer_names to authenticated;
+
 -- Reads: own data or trainer.
 create policy "plans_read"     on plans     for select using (user_id = auth.uid() OR public.is_trainer());
 create policy "sessions_read"  on sessions  for select using (user_id = auth.uid() OR public.is_trainer());
@@ -187,18 +226,19 @@ create policy "profiles_write"  on profiles  for update using (id    = auth.uid(
 
 **Forward-compatibility note**: when spec #2 introduces trainer-assigns-plan, the trainer needs to write a row where `user_id ≠ auth.uid()`. That will be added as a `security definer` RPC (`assign_plan(...)`) that checks `is_trainer` server-side. Not built in this spec.
 
-**Forward-compatibility note**: with strict profile reads, a member viewing "assigned by trainer Bob" cannot read Bob's profile. Spec #2 will denormalise `assigned_by_name` onto the plan row or expose a small public view of trainer names.
+**Trainer-name visibility for members**: handled via the `public.trainer_names` view defined above. Members can join `plans.assigned_by → trainer_names.id` to display "Assigned by trainer Bob" without reading the full trainer profile. Created now so spec #2 needs no schema migration.
 
 ### Dexie schema (v4)
 
 ```ts
 this.version(4).stores({
-  plans:     'id, userId, weekStart, updatedAt',
-  sessions:  'id, userId, planId, date, updatedAt',
-  metrics:   'id, userId, date, updatedAt',
-  favorites: '[userId+exerciseId], userId, addedAt',
-  syncQueue: '++seq, table, rowId, op, attempts',
-  syncMeta:  'key',
+  plans:          'id, userId, weekStart, updatedAt',
+  sessions:       'id, userId, planId, date, updatedAt',
+  metrics:        'id, userId, date, updatedAt',
+  favorites:      '[userId+exerciseId], userId, addedAt',
+  syncQueue:      '++seq, table, rowId',
+  syncDeadLetter: '++seq, table, rowId',
+  syncMeta:       'key',
 }).upgrade(async (tx) => {
   await tx.table('plans').clear();
   await tx.table('sessions').clear();
@@ -207,7 +247,16 @@ this.version(4).stores({
 });
 ```
 
-TypeScript interfaces gain `id: string`, `userId: string`, `updatedAt: number`. A `putWithSync()` helper hides the boilerplate at write sites.
+TypeScript interfaces gain three fields on every owned row:
+
+- `id: string` (UUID, was `number` auto-increment)
+- `userId: string` (always the owner — Dexie still only ever holds current-user data)
+- `updatedAt: number` (local `Date.now()` of last local edit; used for in-app sorting only)
+- `serverVersion: string | null` (the server's `updated_at` ISO string when this row was last pulled, or `null` if never synced — used for optimistic-concurrency on push, see §5)
+
+`putWithSync()` and `deleteWithSync()` fill `id`, `userId`, and `updatedAt` automatically so call sites don't have to.
+
+The `syncDeadLetter` table holds queue rows that have permanently failed (see §5 "Push worker — dead letter").
 
 ## 5. Sync layer
 
@@ -217,33 +266,54 @@ TypeScript interfaces gain `id: string`, `userId: string`, `updatedAt: number`. 
 interface SyncQueueRow {
   seq?: number;
   table: 'plans' | 'sessions' | 'metrics' | 'favorites';
-  rowId: string;             // UUID, or 'userId:exerciseId' for favorites
-  op: 'upsert' | 'delete';
+  rowId: string;                    // canonical encoding — see below
+  op: 'insert' | 'update' | 'delete';
+  expectedServerVersion: string | null;  // captured at enqueue time; drives optimistic concurrency
   attempts: number;
   lastError?: string;
+  lastErrorStatus?: number;
   queuedAt: number;
 }
 ```
 
-Every write goes through one of two helpers that mutate Dexie AND enqueue a sync entry in the same transaction. So a queue row can never get lost relative to its data.
+**`rowId` canonical encoding**:
+
+- `plans`, `sessions`, `metrics` → the row's UUID string.
+- `favorites` → `${userId}:${exerciseId}`. Both halves are well-formed and neither contains `:` (UUIDs and exercise IDs from the bundled catalog are alphanumeric/hyphenated), so the format is unambiguous. A `parseFavoriteRowId(rowId)` helper lives next to `putWithSync`. Tests assert the encoding.
+
+Every write goes through one of two helpers that mutate Dexie AND enqueue a sync entry in the same Dexie transaction. So a queue row can never get lost relative to its data.
 
 ```ts
-async function putWithSync(table, row, meta) {
+async function putWithSync(table, partialRow, meta) {
   await db.transaction('rw', table, db.syncQueue, async () => {
+    const existing = await table.get(partialRow.id);
+    const row = { ...partialRow, userId, updatedAt: Date.now(),
+                  serverVersion: existing?.serverVersion ?? null };
     await table.put(row);
-    await db.syncQueue.add({ table: meta.table, rowId: row.id, op: 'upsert', attempts: 0, queuedAt: Date.now() });
+    await db.syncQueue.add({
+      table: meta.table, rowId: meta.rowId(row),
+      op: existing ? 'update' : 'insert',
+      expectedServerVersion: existing?.serverVersion ?? null,
+      attempts: 0, queuedAt: Date.now(),
+    });
   });
 }
 
 async function deleteWithSync(table, rowId, meta) {
   await db.transaction('rw', table, db.syncQueue, async () => {
+    const existing = await table.get(rowId);
     await table.delete(rowId);
-    await db.syncQueue.add({ table: meta.table, rowId, op: 'delete', attempts: 0, queuedAt: Date.now() });
+    await db.syncQueue.add({
+      table: meta.table, rowId: meta.rowIdOf(existing ?? { id: rowId }),
+      op: 'delete',
+      expectedServerVersion: existing?.serverVersion ?? null,
+      attempts: 0, queuedAt: Date.now(),
+    });
   });
 }
 ```
 
-The push worker translates `op: 'delete'` into an `update` that sets `deleted_at = now()` on the server (the trigger then bumps `updated_at`).
+`expectedServerVersion` is the value the **server** last reported (or `null` if the row was created locally and has never been pushed). The push worker uses it for optimistic concurrency.
 
 ### Tombstones
 
@@ -251,27 +321,68 @@ Deletes set `deleted_at = now()` server-side. Clients receive these via pull and
 
 ### Push worker
 
-- Triggers: enqueue, `online` event, `visibilitychange`, 30 s heartbeat while open + online.
-- Processes queue in `seq` order, one at a time. No concurrency on same row.
-- Success → delete queue row.
-- Failure → increment `attempts`, store `lastError`, exponential backoff (1 s → 2 s → 4 s … cap 5 min).
-- 401 / 403 → assume token is dead, sign out, wipe Dexie, show login.
-- 409 / constraint violation → poisoned after 3 attempts; log and surface a toast to flag it for debug.
-- ≥ 10 attempts on the same row → persistent "Sync is stuck" banner with manual flush.
+**Triggers**: enqueue, `online` event, `visibilitychange`, 30 s heartbeat while open + online, and an explicit `flushNow()` method on the sync orchestrator (used by tests and by the "Sync is stuck" banner's manual-retry button).
+
+**Ordering**: the invariant is **per-(table, rowId) FIFO**, not global FIFO. The worker scans the queue in `seq` order but only blocks behind earlier entries that share `(table, rowId)`. Different rows can advance independently. This matters once we have a dead letter (below) — one bad row must not freeze the whole queue.
+
+**Per-op behavior**:
+
+| `op` | Request |
+|---|---|
+| `insert` | `INSERT` (Supabase `.insert(row)`). PK uniqueness guarantees safety; no conditional needed. |
+| `update` | `UPDATE ... WHERE id = $id AND updated_at = $expectedServerVersion` (Supabase `.update(row).eq('id', id).eq('updated_at', expectedServerVersion)`). Returns the updated row via `.select()` so we capture the new `updated_at`. |
+| `delete` | `UPDATE ... SET deleted_at = now() WHERE id = $id AND updated_at = $expectedServerVersion`. Returns the row. |
+
+**Success** (HTTP 2xx with rows returned):
+- Read the new `updated_at` from the response and write it to the local row's `serverVersion`.
+- Delete the queue row.
+
+**Conflict** (HTTP 2xx with empty result — the WHERE didn't match): another writer (or the same user from another device) bumped `updated_at` since we last pulled. Trigger a **pull-and-replay** for this row:
+1. Fetch the row from Supabase by id.
+2. **If queue still has this row's local copy unmodified** since the conflict was detected, treat the server's row as the new baseline: update `serverVersion` on the local row to the freshly-pulled value, keep the local *data* (the user's local edit), and re-queue the push with the new `expectedServerVersion`.
+3. If repeated 3 conflicts on the same queue row → dead-letter (the row is stuck in a write-write race or there's a bug).
+
+This is **last-writer-wins**, but explicitly so. The push is no longer a blind "clobber whatever was there"; it's a "I expected to see version T1; if you have T2, I'll pull T2 and try again to overwrite it with my edit."
+
+**Network failure / 5xx**: increment `attempts`, store `lastError`, exponential backoff (1 s → 2 s → 4 s … cap 5 min). Silent.
+
+**401 / 403**: do **not** sign out on a single response. Tell Supabase JS to refresh the session (`auth.refreshSession()`), then retry once. If the refresh succeeds, we continue normally. If the refresh fails *or* if Supabase JS independently fires `onAuthStateChange('SIGNED_OUT')`, *that* is what triggers sign-out + Dexie wipe. A single transient 401 mid-set never destroys an in-progress workout.
+
+**4xx other than 401/403/409** (constraint violation, validation error): treat as poisoned for this row — `attempts` increments, but after 3 attempts the queue row is **moved to `syncDeadLetter`** and the worker advances past it. A persistent banner appears ("N changes couldn't sync — review") that opens a small UI listing dead-lettered rows with their `lastError` and the option to retry or discard.
+
+**HTTP 409** (uniqueness / FK violation): same as the previous bullet. Almost always a bug; dead-letter after 3 retries.
+
+**≥ 10 attempts** on a queue row that's still in `syncQueue` (i.e., network or 5xx loop, not a poisoned 4xx): show the same persistent banner; tapping it forces a `flushNow()`.
 
 ### Pull worker
 
-- Triggers: login, `visibilitychange`, `online`, 60 s heartbeat.
-- For each owned table: `select * where updated_at > $last_pulled_at AND user_id = auth.uid()`.
-- Merge into Dexie per row:
-  - **If the row has a pending entry in `syncQueue`** → keep local. Our queued write will overwrite the server shortly; pulling the server's older state into Dexie now would cause a brief flicker. The queue is the authoritative "I have unpushed changes" signal, not the timestamp.
-  - **Else if `deleted_at != null`** → delete local row.
-  - **Else** → overwrite local with server.
-- Save new `lastPulledAt` per table to `syncMeta`.
+**Triggers**: login, `visibilitychange`, `online`, 60 s heartbeat, and `flushNow()`.
+
+**Query** (per owned table):
+
+```sql
+select * from <table>
+where (updated_at, id) > ($last_pulled_at, $last_pulled_id)
+  and user_id = auth.uid()       -- defense-in-depth; RLS already enforces this
+order by updated_at asc, id asc
+limit 500;
+```
+
+The keyset `(updated_at, id) > ($last_pulled_at, $last_pulled_id)` avoids the same-millisecond-tie loss that a strict `> $last_pulled_at` would cause under load (e.g., backfill or a trainer's batch import in spec #2). The `user_id = auth.uid()` clause is *not* security-load-bearing — RLS already enforces it — but it makes intent explicit and keeps query plans tight.
+
+If the result hits the 500-row `limit`, page until the response is shorter than `limit`. Update `(lastPulledAt, lastPulledId)` in `syncMeta` after each successful page.
+
+**Merge** (per row):
+
+- **If the row has a pending entry in `syncQueue`** → keep local data. Do NOT update `serverVersion` yet — the push will reconcile via the optimistic-concurrency path. (Updating `serverVersion` here would make the next push think it had the latest, and we'd silently overwrite the other device's edit.)
+- **Else if `deleted_at != null`** → delete local row.
+- **Else** → overwrite local with server, and set `serverVersion = server.updated_at`.
 
 ### Profile sync
 
 Profile is in-memory only (no Dexie cache for the row; a `lastKnownProfile` is held in localStorage for the offline-bootstrap case). Refetched on every app foreground. When `is_trainer` flips, the UI re-renders.
+
+Profile *edits* (changing `display_name` from `<Settings />`) are **online-only**: the Settings form is disabled when `navigator.onLine === false` and shows "Display name can't be edited offline." Rationale: this field is rarely touched, queuing it adds another sync path, and the trade-off cost is one disabled input in one rarely-visited screen.
 
 ### Bootstrap sequence
 
@@ -285,9 +396,9 @@ Profile is in-memory only (no Dexie cache for the row; a `lastKnownProfile` is h
    - If `lastKnownProfile` exists in localStorage, render app marked "stale", refetch on next foreground/online.
    - Otherwise (no cache, no network) block with "Connect to finish setup" screen. Only happens on first-ever login.
 
-### Conflict resolution
+### Conflict resolution — summary
 
-Single writer per row in practice. The only conflict path is **same user on two devices**. The server's `updated_at` (set by trigger at write time) is authoritative — whichever device's push lands at the server later wins. The pull rule above (queue presence → keep local; else server wins) is consistent with this: locally pending changes will overwrite the server on their next push, and any client without pending changes will always converge to the server's latest value. Acceptable for this app — sessions are mostly write-once, metrics daily, plans rare.
+The combination of (a) optimistic-concurrency push and (b) "pending-queue → keep local on pull" delivers a coherent last-writer-wins where the *last* writer is the one whose push lands at the server most recently — never the one whose local clock happens to be later. Trainers in spec #2 (who will write to other members' rows via an `assign_plan` RPC) inherit the same guarantee for free: their write will conditionally check `updated_at`, and if the member edited since the trainer pulled, the trainer's push will conflict and resync rather than silently overwrite.
 
 ## 6. Auth flow + UI
 
@@ -312,12 +423,13 @@ src/
 │   ├── useAuth.ts             # hook
 │   └── Login.tsx              # magic-link page
 ├── sync/
-│   ├── index.ts               # orchestrator (start/stop)
-│   ├── pushWorker.ts
-│   ├── pullWorker.ts
-│   ├── putWithSync.ts         # write helper
+│   ├── index.ts               # orchestrator: start/stop, flushNow()
+│   ├── pushWorker.ts          # per-(table, rowId) FIFO, optimistic CC, dead-letter
+│   ├── pullWorker.ts          # keyset-paginated pull
+│   ├── putWithSync.ts         # write helpers + rowId encoders
+│   ├── deadLetter.ts          # dead-letter list view & retry/discard
 │   ├── mapping.ts             # snake_case ↔ camelCase
-│   └── syncMeta.ts            # lastPulledAt persistence
+│   └── syncMeta.ts            # (lastPulledAt, lastPulledId) per table
 └── pages/
     └── Settings.tsx           # sign-out, display name edit
 ```
@@ -358,7 +470,10 @@ Minimal, single screen. No "sign up" link — admin provisions accounts. After s
 
 ### Settings page
 
-Reached via a gear icon in the header (next to language switcher). Lets the user edit `display_name` and sign out. Sign-out clears Supabase session, wipes Dexie, navigates to `/`.
+Reached via a gear icon in the header (next to language switcher). Lets the user edit `display_name` and sign out.
+
+- **Display name edit**: writes go directly to Supabase via `update profiles set display_name = ... where id = auth.uid()`. The input is disabled when `navigator.onLine === false`, with a helper text "Connect to edit". Rationale in §5 "Profile sync".
+- **Sign out**: clears Supabase session, wipes Dexie, navigates to `/`. The login screen mounts.
 
 ### Session persistence
 
@@ -382,20 +497,21 @@ Principle: **never block a workout for an error that can wait**. Silent retry is
 | Situation | Behavior |
 |---|---|
 | Magic-link request fails (network) | Inline form error: "Couldn't send the link." Resubmit to retry. |
-| Email not in `auth.users` | Supabase returns success either way (anti-enumeration). User sees "check your email" with no follow-up. Admin can verify provisioning. |
+| Email not in `auth.users` | Supabase returns success either way (anti-enumeration). User sees "check your email" with no follow-up. Admin can verify provisioning. (Dashboard config that gates this — see §10.) |
 | Magic-link redirect with expired token | Show login with "That link expired. Send a new one." |
-| Refresh token expires mid-session | `onAuthStateChange('SIGNED_OUT')` → wipe Dexie → show login. |
+| Single 401/403 on a sync call | Trigger `auth.refreshSession()` and retry once. **Do not** sign out. |
+| `onAuthStateChange('SIGNED_OUT')` fires | The authoritative signal — Supabase JS gave up on the session. Wipe Dexie, show login. |
 | Profile fetch fails on bootstrap | Use `lastKnownProfile` if present; else show "Connect to finish setup" (first login only). |
 
 ### Sync push
 
 | Situation | Behavior |
 |---|---|
-| Network failure | Backoff + retry. Silent. |
-| 401 / 403 | Sign out. Wipe Dexie. Show login. |
-| 409 / constraint | Poisoned after 3 attempts. Toast for debug. |
-| 5xx | Same as network failure. |
-| ≥ 10 attempts | Persistent "Sync is stuck" banner; tap to force flush. |
+| Network failure / 5xx | Backoff + retry on the whole queue. Silent. |
+| Single 401/403 | Refresh token, retry once. Sign-out only on `SIGNED_OUT` event. |
+| Conflict (empty result on conditional update) | Pull row, replay with new `expectedServerVersion`. Repeat ≤ 3 times. |
+| 4xx other (400, 422, etc.) / 409 / repeated conflict | Move row to `syncDeadLetter` after 3 attempts. Queue advances. Banner: "N changes couldn't sync — review". |
+| ≥ 10 attempts on a row still in `syncQueue` (network loop) | Persistent banner; tap to `flushNow()`. |
 
 ### Sync pull
 
@@ -441,24 +557,34 @@ A hand-rolled in-memory fake of the Supabase client (`src/test/fakeSupabase.ts`)
 
 1. Sign in (fake Supabase).
 2. Build a plan via the existing workflow UI.
-3. Assert: Dexie has the plan; sync queue has one entry.
-4. Run push once.
-5. Assert: fake Supabase has the plan; sync queue empty.
+3. Assert: Dexie has the plan with `serverVersion === null`; sync queue has one entry with `op: 'insert'`.
+4. Run push once (`flushNow()`).
+5. Assert: fake Supabase has the plan; Dexie's `serverVersion` now equals fake Supabase's `updated_at`; sync queue empty.
 6. Mutate same row directly in fake Supabase (simulate other device).
 7. Run pull once.
-8. Assert: Dexie reflects the remote change.
-9. Delete via UI.
-10. Push, then assert fake Supabase has `deleted_at != null` and Dexie no longer has the row.
+8. Assert: Dexie reflects the remote change and `serverVersion` advanced.
+9. **Conflict path**: edit the row locally (now Dexie has a new pending queue entry with `expectedServerVersion = T2`). Before pushing, directly mutate fake Supabase again to `T3`. Run push. Assert: the first attempt comes back with an empty result; the orchestrator pulls `T3`, updates `expectedServerVersion` on the queue row, re-pushes; final state is the local data on the server with `updated_at = T4`. Dexie's `serverVersion = T4`.
+10. Delete via UI.
+11. Push, then assert fake Supabase has `deleted_at != null` and Dexie no longer has the row.
 
 If this stays green, the foundation works.
 
-### Existing tests
+### Existing tests — explicit update list
 
-All must keep passing without modification. The "Dexie only holds current-user data" simplification is verified by this constraint. One helper in `src/test/setup.ts`:
+The schema change is breaking. The "Dexie only holds current-user data" simplification preserves **query** structure but not **type** structure. The implementer must update:
+
+- `src/test/db.test.ts` — bump the `verno` assertion to `4`; add the new required fields (`id`, `userId`, `updatedAt`, `serverVersion`) to the raw `db.plans.add({...})` test data; assert new indexes (`syncQueue`, `syncDeadLetter`, `syncMeta`).
+- `src/test/workflow.test.tsx` — wrap test setup with `stubAuthenticatedUser` (see helper below); if it asserts on plan IDs being numeric, switch to UUID-shaped strings.
+- `src/pages/PlanEditor.tsx` — `Number(id)` on line ~25 becomes `id` (string passthrough). The route param is already `string | undefined`.
+- Any other call site that does `Number(plan.id)` or treats IDs as numeric.
+
+One new helper in `src/test/setup.ts`:
 
 ```ts
 beforeEach(() => stubAuthenticatedUser({ id: 'u-test', isTrainer: false }));
 ```
+
+`stubAuthenticatedUser` mounts the fake Supabase session so `<Guarded>` lets the app render. It does **not** retrofit data — that's why the existing tests' `db.plans.add({...})` calls have to be updated to include the new required fields.
 
 ### Out of scope for automated tests
 
@@ -486,6 +612,9 @@ Deferred to future specs:
 
 ## 10. Open items for spec author / implementer
 
-- Confirm Supabase project URL + anon key environment variable names match Netlify configuration.
+- Confirm Supabase project URL + anon key environment variable names match Netlify configuration (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`).
 - Decide refresh-token TTL value at provisioning time (recommended: 1 year).
 - Decide email template wording for the magic link (Supabase default is fine for v1).
+- **Dashboard config (Auth → Providers → Email)**: disable public signup so no one can sign up without admin creating the `auth.users` row. Verify the OTP response is uniform regardless of whether the email exists (anti-enumeration).
+- **Dashboard config (Auth → URL Configuration)**: add the production app URL and the local dev URL to "Additional Redirect URLs" so `emailRedirectTo` is accepted. Without this, magic links 404.
+- **Dashboard config (Database → Replication)**: realtime is *not* needed in this spec; can stay disabled.
