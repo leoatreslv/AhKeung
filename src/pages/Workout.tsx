@@ -20,14 +20,14 @@ export function Workout() {
   const [session, setSession] = useState<WorkoutSession | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [startedAt] = useState(() => Date.now());
+  const [date] = useState(() => todayISO());
 
-  useEffect(() => {
-    if (planId && !plan) return;
-    if (session) return;
-    const newSession: WorkoutSession = {
+  if (session === null && (!planId || plan)) {
+    setSession({
       planId: plan?.id,
-      date: todayISO(),
-      startedAt: Date.now(),
+      date,
+      startedAt,
       exercises:
         plan?.exercises.map((pe) => ({
           exerciseId: pe.exerciseId,
@@ -37,9 +37,8 @@ export function Workout() {
             done: false,
           })),
         })) ?? [],
-    };
-    setSession(newSession);
-  }, [plan, planId, session]);
+    });
+  }
 
   useEffect(() => {
     if (!session) return;

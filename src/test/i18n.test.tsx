@@ -66,24 +66,30 @@ describe('i18n', () => {
   it('exposes every muscle group label in both locales', () => {
     const groups = ['chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio'] as const;
 
-    function Dump({ which }: { which: 'en' | 'zh-Hant' }) {
+    function Dump() {
       const { t, setLocale } = useI18n();
-      // Trigger the locale on first render
-      if (typeof window !== 'undefined' && !(window as unknown as { __k: boolean }).__k) {
-        (window as unknown as { __k: boolean }).__k = true;
-        setLocale(which);
-      }
-      return <div data-testid="dump">{groups.map((g) => t.muscleGroup[g]).join('|')}</div>;
+      return (
+        <>
+          <button onClick={() => setLocale('zh-Hant')}>to-zh</button>
+          <div data-testid="dump">{groups.map((g) => t.muscleGroup[g]).join('|')}</div>
+        </>
+      );
     }
 
-    const { unmount } = render(
+    render(
       <I18nProvider>
-        <Dump which="en" />
+        <Dump />
       </I18nProvider>,
     );
+
     const enParts = screen.getByTestId('dump').textContent!.split('|');
     expect(enParts).toHaveLength(groups.length);
     expect(enParts.every((s) => s.length > 0)).toBe(true);
-    unmount();
+
+    fireEvent.click(screen.getByText('to-zh'));
+    const zhParts = screen.getByTestId('dump').textContent!.split('|');
+    expect(zhParts).toHaveLength(groups.length);
+    expect(zhParts.every((s) => s.length > 0)).toBe(true);
+    expect(zhParts).not.toEqual(enParts);
   });
 });

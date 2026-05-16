@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -33,15 +33,15 @@ export function PlanEditor() {
   const [focus, setFocus] = useState<MuscleGroup[]>([]);
   const [planExercises, setPlanExercises] = useState<PlanExercise[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [loadedFromId, setLoadedFromId] = useState<number | undefined>(undefined);
 
-  useEffect(() => {
-    if (existing) {
-      setName(existing.name);
-      setWeekStart(existing.weekStart);
-      setFocus(existing.focus);
-      setPlanExercises(existing.exercises);
-    }
-  }, [existing]);
+  if (existing && existing.id !== loadedFromId) {
+    setLoadedFromId(existing.id);
+    setName(existing.name);
+    setWeekStart(existing.weekStart);
+    setFocus(existing.focus);
+    setPlanExercises(existing.exercises);
+  }
 
   const filteredExercises = useMemo(() => {
     if (!catalog) return [];
