@@ -99,6 +99,10 @@ export interface Translation {
     primaryMuscles: string;
     secondaryMuscles: string;
     viewDetails: string;
+    favorites: string;
+    others: string;
+    addToFavorites: string;
+    removeFromFavorites: string;
   };
 
   metrics: {

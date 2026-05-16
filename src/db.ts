@@ -62,10 +62,16 @@ export interface BodyMetric {
   notes?: string;
 }
 
+export interface Favorite {
+  exerciseId: string;
+  addedAt: number;
+}
+
 class AhKeungDB extends Dexie {
   plans!: Table<Plan, number>;
   sessions!: Table<WorkoutSession, number>;
   metrics!: Table<BodyMetric, number>;
+  favorites!: Table<Favorite, string>;
 
   constructor() {
     super('ah-keung');
@@ -83,6 +89,13 @@ class AhKeungDB extends Dexie {
     }).upgrade(async (tx) => {
       await tx.table('plans').clear();
       await tx.table('sessions').clear();
+    });
+    // v3: favorites table.
+    this.version(3).stores({
+      plans: '++id, weekStart, createdAt',
+      sessions: '++id, planId, date, startedAt',
+      metrics: '++id, date',
+      favorites: 'exerciseId, addedAt',
     });
   }
 }

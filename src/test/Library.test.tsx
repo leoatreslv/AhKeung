@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { I18nProvider } from '../i18n';
 import { Library } from '../pages/Library';
 import { __resetExercisesForTest } from '../exercises';
+import { db } from '../db';
 
 function renderLibrary() {
   return render(
@@ -16,8 +17,10 @@ function renderLibrary() {
 }
 
 describe('Library page', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     __resetExercisesForTest();
+    await db.delete();
+    await db.open();
   });
 
   it('shows a loading state then renders the catalog', async () => {
@@ -52,6 +55,29 @@ describe('Library page', () => {
 
     expect(screen.getByText('Barbell Squat')).toBeInTheDocument();
     expect(screen.queryByText('Pullups')).not.toBeInTheDocument();
+  });
+
+  it('toggles a favorite when the star is tapped', async () => {
+    renderLibrary();
+    await waitFor(() => screen.getByText('Pullups'));
+
+    const starBtns = screen.getAllByRole('button', { name: /Add to favourites/i });
+    expect(starBtns.length).toBeGreaterThan(0);
+    fireEvent.click(starBtns[0]);
+
+    await waitFor(async () => {
+      const favs = await db.favorites.toArray();
+      expect(favs.length).toBe(1);
+    });
+
+    // Tap the now-filled star to remove the favourite.
+    const filled = await screen.findByRole('button', { name: /Remove from favourites/i });
+    fireEvent.click(filled);
+
+    await waitFor(async () => {
+      const favs = await db.favorites.toArray();
+      expect(favs.length).toBe(0);
+    });
   });
 
   it('expands an exercise to show instructions on tap', async () => {

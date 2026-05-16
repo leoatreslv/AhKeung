@@ -102,6 +102,10 @@ export const zhHant: Translation = {
     primaryMuscles: '主要肌群',
     secondaryMuscles: '輔助肌群',
     viewDetails: '查看詳情',
+    favorites: '我的最愛',
+    others: '全部動作',
+    addToFavorites: '加入我的最愛',
+    removeFromFavorites: '從我的最愛移除',
   },
 
   metrics: {

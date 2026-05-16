@@ -7,13 +7,13 @@ beforeEach(async () => {
 });
 
 describe('Dexie database', () => {
-  it('opens at schema version 2', async () => {
-    expect(db.verno).toBe(2);
+  it('opens at schema version 3', async () => {
+    expect(db.verno).toBe(3);
   });
 
-  it('has three tables: plans, sessions, metrics', () => {
+  it('has four tables: plans, sessions, metrics, favorites', () => {
     const names = db.tables.map((t) => t.name).sort();
-    expect(names).toEqual(['metrics', 'plans', 'sessions']);
+    expect(names).toEqual(['favorites', 'metrics', 'plans', 'sessions']);
   });
 
   describe('plans CRUD', () => {
@@ -66,6 +66,26 @@ describe('Dexie database', () => {
       const got = await db.sessions.get(id);
       const doneCount = got?.exercises[0].sets.filter((s) => s.done).length;
       expect(doneCount).toBe(2);
+    });
+  });
+
+  describe('favorites CRUD', () => {
+    it('toggles a favorite via the helper', async () => {
+      const { toggleFavorite } = await import('../useFavorites');
+
+      await toggleFavorite('Pullups');
+      expect(await db.favorites.get('Pullups')).toBeDefined();
+
+      await toggleFavorite('Pullups');
+      expect(await db.favorites.get('Pullups')).toBeUndefined();
+    });
+
+    it('stores multiple favorites keyed by exerciseId', async () => {
+      const { toggleFavorite } = await import('../useFavorites');
+      await toggleFavorite('Pullups');
+      await toggleFavorite('Barbell_Squat');
+      const all = await db.favorites.toArray();
+      expect(all.map((f) => f.exerciseId).sort()).toEqual(['Barbell_Squat', 'Pullups']);
     });
   });
 

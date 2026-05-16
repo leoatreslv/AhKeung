@@ -6,12 +6,14 @@ import { imageUrl } from '../exercises';
 import { useExercises } from '../useExercises';
 import { todayISO, formatDuration } from '../utils';
 import { useT } from '../i18n';
+import { useFavoriteIds } from '../useFavorites';
 
 export function Workout() {
   const t = useT();
   const { planId } = useParams<{ planId?: string }>();
   const navigate = useNavigate();
   const catalog = useExercises();
+  const favorites = useFavoriteIds();
   const plan = useLiveQuery(
     async () => (planId ? await db.plans.get(Number(planId)) : undefined),
     [planId],
@@ -218,10 +220,15 @@ export function Workout() {
               <button onClick={() => setPickerOpen(false)} className="ml-auto text-slate-400 text-xl leading-none">×</button>
             </div>
             <ul className="overflow-y-auto flex-1">
-              {catalog
-                .filter((e) => !session.exercises.find((se) => se.exerciseId === e.id))
-                .map((ex) => {
+              {(() => {
+                const available = catalog.filter(
+                  (e) => !session.exercises.find((se) => se.exerciseId === e.id),
+                );
+                const favs = available.filter((e) => favorites.has(e.id));
+                const rest = available.filter((e) => !favorites.has(e.id));
+                const row = (ex: typeof available[number]) => {
                   const name = t.exerciseName[ex.id] ?? ex.name;
+                  const isFav = favorites.has(ex.id);
                   return (
                     <li key={ex.id}>
                       <button
@@ -233,14 +240,32 @@ export function Workout() {
                         ) : (
                           <div className="w-10 h-10 rounded bg-slate-700" />
                         )}
-                        <div className="min-w-0">
+                        <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm truncate">{name}</div>
                           <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
                         </div>
+                        {isFav && <span className="text-amber-400 text-sm shrink-0">★</span>}
                       </button>
                     </li>
                   );
-                })}
+                };
+                return (
+                  <>
+                    {favs.length > 0 && (
+                      <li className="px-4 py-2 text-[10px] uppercase tracking-wider text-amber-400 bg-slate-900 sticky top-0">
+                        ★ {t.library.favorites}
+                      </li>
+                    )}
+                    {favs.map(row)}
+                    {favs.length > 0 && rest.length > 0 && (
+                      <li className="px-4 py-2 text-[10px] uppercase tracking-wider text-slate-500 bg-slate-900 sticky top-0">
+                        {t.library.others}
+                      </li>
+                    )}
+                    {rest.map(row)}
+                  </>
+                );
+              })()}
             </ul>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { muscleGroupColor, type MuscleGroup } from '../db';
 import { useT } from '../i18n';
 import { useExercises } from '../useExercises';
 import { imageUrl } from '../exercises';
+import { useFavoriteIds, toggleFavorite } from '../useFavorites';
 
 const GROUPS: (MuscleGroup | 'all')[] = [
   'all', 'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -11,6 +12,7 @@ const GROUPS: (MuscleGroup | 'all')[] = [
 export function Library() {
   const t = useT();
   const all = useExercises();
+  const favorites = useFavoriteIds();
   const [filter, setFilter] = useState<MuscleGroup | 'all'>('all');
   const [search, setSearch] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -60,30 +62,43 @@ export function Library() {
         {list.map((ex) => {
           const name = t.exerciseName[ex.id] ?? ex.name;
           const isOpen = openId === ex.id;
+          const isFav = favorites.has(ex.id);
           return (
             <li key={ex.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-              <button
-                onClick={() => setOpenId(isOpen ? null : ex.id)}
-                className="w-full text-left p-3 flex items-center gap-3"
-              >
-                {ex.images[0] ? (
-                  <img
-                    src={imageUrl(ex.images[0])}
-                    alt=""
-                    loading="lazy"
-                    className="w-14 h-14 rounded-lg object-cover bg-slate-700 shrink-0"
-                  />
-                ) : (
-                  <div className="w-14 h-14 rounded-lg bg-slate-700 shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm truncate">{name}</div>
-                  <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
-                </div>
-                <span className={`${muscleGroupColor[ex.muscleGroup]} text-white text-[10px] px-2 py-0.5 rounded-full shrink-0`}>
-                  {t.muscleGroup[ex.muscleGroup]}
-                </span>
-              </button>
+              <div className="flex items-stretch">
+                <button
+                  onClick={() => setOpenId(isOpen ? null : ex.id)}
+                  className="flex-1 min-w-0 text-left p-3 flex items-center gap-3"
+                >
+                  {ex.images[0] ? (
+                    <img
+                      src={imageUrl(ex.images[0])}
+                      alt=""
+                      loading="lazy"
+                      className="w-14 h-14 rounded-lg object-cover bg-slate-700 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-lg bg-slate-700 shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{name}</div>
+                    <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
+                  </div>
+                  <span className={`${muscleGroupColor[ex.muscleGroup]} text-white text-[10px] px-2 py-0.5 rounded-full shrink-0`}>
+                    {t.muscleGroup[ex.muscleGroup]}
+                  </span>
+                </button>
+                <button
+                  onClick={() => void toggleFavorite(ex.id)}
+                  aria-label={isFav ? t.library.removeFromFavorites : t.library.addToFavorites}
+                  aria-pressed={isFav}
+                  className={`px-3 text-lg shrink-0 border-l border-slate-700 ${
+                    isFav ? 'text-amber-400' : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  {isFav ? '★' : '☆'}
+                </button>
+              </div>
               {isOpen && (
                 <div className="px-3 pb-3 border-t border-slate-700 pt-2 text-sm text-slate-300 space-y-3">
                   {ex.images.length > 0 && (

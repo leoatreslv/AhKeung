@@ -102,6 +102,10 @@ export const en: Translation = {
     primaryMuscles: 'Primary muscles',
     secondaryMuscles: 'Secondary muscles',
     viewDetails: 'View details',
+    favorites: 'Favourites',
+    others: 'All exercises',
+    addToFavorites: 'Add to favourites',
+    removeFromFavorites: 'Remove from favourites',
   },
 
   metrics: {

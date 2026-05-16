@@ -11,6 +11,7 @@ import { imageUrl, type ExerciseMeta } from '../exercises';
 import { useExercises } from '../useExercises';
 import { weekStartISO } from '../utils';
 import { useT } from '../i18n';
+import { useFavoriteIds } from '../useFavorites';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -255,6 +256,7 @@ function ExercisePicker({
   onClose: () => void;
 }) {
   const t = useT();
+  const favorites = useFavoriteIds();
   const [search, setSearch] = useState('');
   const list = exercises.filter((e) => {
     if (excludeIds.includes(e.id)) return false;
@@ -263,6 +265,32 @@ function ExercisePicker({
     const q = search.toLowerCase();
     return local.toLowerCase().includes(q) || e.name.toLowerCase().includes(q);
   });
+  const favList = list.filter((e) => favorites.has(e.id));
+  const restList = list.filter((e) => !favorites.has(e.id));
+
+  const renderRow = (ex: ExerciseMeta) => {
+    const name = t.exerciseName[ex.id] ?? ex.name;
+    const isFav = favorites.has(ex.id);
+    return (
+      <li key={ex.id}>
+        <button
+          onClick={() => onPick(ex.id)}
+          className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
+        >
+          {ex.images[0] ? (
+            <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+          ) : (
+            <div className="w-10 h-10 rounded bg-slate-700" />
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-sm truncate">{name}</div>
+            <div className="text-xs text-slate-400 truncate capitalize">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
+          </div>
+          {isFav && <span className="text-amber-400 text-sm shrink-0">★</span>}
+        </button>
+      </li>
+    );
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 z-20 flex items-end" onClick={onClose}>
@@ -284,27 +312,18 @@ function ExercisePicker({
           />
         </div>
         <ul className="overflow-y-auto flex-1">
-          {list.map((ex) => {
-            const name = t.exerciseName[ex.id] ?? ex.name;
-            return (
-              <li key={ex.id}>
-                <button
-                  onClick={() => onPick(ex.id)}
-                  className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
-                >
-                  {ex.images[0] ? (
-                    <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
-                  ) : (
-                    <div className="w-10 h-10 rounded bg-slate-700" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm truncate">{name}</div>
-                    <div className="text-xs text-slate-400 truncate capitalize">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
-                  </div>
-                </button>
-              </li>
-            );
-          })}
+          {favList.length > 0 && (
+            <li className="px-4 py-2 text-[10px] uppercase tracking-wider text-amber-400 bg-slate-900 sticky top-0">
+              ★ {t.library.favorites}
+            </li>
+          )}
+          {favList.map(renderRow)}
+          {favList.length > 0 && restList.length > 0 && (
+            <li className="px-4 py-2 text-[10px] uppercase tracking-wider text-slate-500 bg-slate-900 sticky top-0">
+              {t.library.others}
+            </li>
+          )}
+          {restList.map(renderRow)}
           {list.length === 0 && (
             <li className="p-4 text-center text-slate-500 text-sm">{t.planEditor.noMatch}</li>
           )}
