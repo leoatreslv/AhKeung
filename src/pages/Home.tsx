@@ -1,11 +1,15 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, muscleGroupColor } from '../db';
-import { weekStartISO, formatDate } from '../utils';
+import { weekStartISO, formatDate, formatDuration } from '../utils';
 import { useI18n } from '../i18n';
+import { useExercises } from '../useExercises';
 
 export function Home() {
   const { t, locale } = useI18n();
+  const catalog = useExercises();
+  const [openSessionId, setOpenSessionId] = useState<number | null>(null);
   const wk = weekStartISO();
   const currentPlan = useLiveQuery(
     () => db.plans.where('weekStart').equals(wk).first(),
@@ -110,13 +114,62 @@ export function Home() {
         {recentSessions && recentSessions.length > 0 ? (
           <ul className="space-y-2">
             {recentSessions.map((s) => {
-              const totalSets = s.exercises.reduce((sum, ex) => sum + ex.sets.filter((x) => x.done).length, 0);
+              const sessionId = s.id;
+              const totalSetsDone = s.exercises.reduce((sum, ex) => sum + ex.sets.filter((x) => x.done).length, 0);
+              const isOpen = sessionId !== undefined && openSessionId === sessionId;
+              const duration = s.endedAt && s.startedAt ? s.endedAt - s.startedAt : null;
               return (
-                <li key={s.id} className="bg-slate-800 rounded-xl p-3 border border-slate-700 flex items-center">
-                  <div>
-                    <div className="font-semibold">{formatDate(s.date, locale)}</div>
-                    <div className="text-xs text-slate-400">{t.home.sessionSummary(s.exercises.length, totalSets)}</div>
-                  </div>
+                <li key={sessionId} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                  <button
+                    onClick={() => sessionId !== undefined && setOpenSessionId(isOpen ? null : sessionId)}
+                    className="w-full text-left p-3 flex items-center gap-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold">{formatDate(s.date, locale)}</div>
+                      <div className="text-xs text-slate-400">{t.home.sessionSummary(s.exercises.length, totalSetsDone)}</div>
+                    </div>
+                    {duration !== null && (
+                      <div className="text-xs text-slate-400 tabular-nums shrink-0">{formatDuration(duration)}</div>
+                    )}
+                    <span className="text-slate-500 text-xs">{isOpen ? '▾' : '▸'}</span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-3 pb-3 border-t border-slate-700 pt-2 space-y-2">
+                      {s.exercises.length === 0 ? (
+                        <p className="text-xs text-slate-500">{t.workout.noExercises}</p>
+                      ) : (
+                        s.exercises.map((ex, idx) => {
+                          const meta = catalog?.find((c) => c.id === ex.exerciseId);
+                          const name = meta ? (t.exerciseName[meta.id] ?? meta.name) : ex.exerciseId;
+                          const doneSets = ex.sets.filter((x) => x.done);
+                          return (
+                            <div key={idx} className="text-sm">
+                              <div className="flex items-baseline gap-2">
+                                <span className="font-medium truncate flex-1">{name}</span>
+                                <span className="text-xs text-slate-400 shrink-0 tabular-nums">
+                                  {doneSets.length}/{ex.sets.length}
+                                </span>
+                              </div>
+                              {doneSets.length > 0 && (
+                                <div className="text-xs text-slate-400 mt-0.5 tabular-nums">
+                                  {doneSets
+                                    .map((set) => set.weight > 0
+                                      ? `${set.reps}×${set.weight}${t.workout.weightUnit}`
+                                      : `${set.reps}`)
+                                    .join(' · ')}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                      {s.notes && (
+                        <div className="text-xs text-slate-400 italic pt-1 border-t border-slate-700/50">
+                          {s.notes}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </li>
               );
             })}
