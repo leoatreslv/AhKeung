@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import { fixtureExercises } from './fixtures';
+import { clearAuthStub } from './authStub';
 
 // useExercises.ts kicks off loadExercises() at module load, which runs
 // before any beforeEach hook. Install fetch stub at module load so the
@@ -30,3 +31,5 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
 });
+
+afterEach(() => { clearAuthStub(); });
