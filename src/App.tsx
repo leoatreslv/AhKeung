@@ -21,7 +21,11 @@ function Shell() {
   return (
     <div className="flex flex-col h-full max-w-md mx-auto bg-slate-900 text-slate-100">
       <header className="px-4 pt-6 pb-3 border-b border-slate-800 flex items-center gap-2 sticky top-0 z-10 bg-slate-900/95 backdrop-blur">
-        <div className="w-8 h-8 rounded-lg bg-keung-600 flex items-center justify-center font-extrabold">K</div>
+        <img
+          src={`${import.meta.env.BASE_URL}logo.png`}
+          alt=""
+          className="w-9 h-9 rounded-lg object-cover ring-2 ring-keung-600"
+        />
         <div className="flex-1 min-w-0">
           <h1 className="text-xl font-bold leading-none">{t.appName}</h1>
           <span className="text-xs text-slate-400">{t.tagline}</span>
