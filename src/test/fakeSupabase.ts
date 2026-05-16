@@ -10,6 +10,24 @@ interface Session {
 type AuthEvent = 'SIGNED_IN' | 'SIGNED_OUT' | 'TOKEN_REFRESHED';
 type AuthListener = (event: AuthEvent, session: Session | null) => void;
 
+type QueryResult = { data: Row[] | null; error: Error | null };
+
+interface Builder extends PromiseLike<QueryResult> {
+  select(cols?: string): Builder;
+  eq(col: string, val: unknown): Builder;
+  insert(row: Row | Row[]): Builder;
+  update(row: Row): Builder;
+  upsert(row: Row | Row[]): Builder;
+  delete(): Builder;
+  then<TResult1 = QueryResult, TResult2 = never>(
+    onResolve?: ((value: QueryResult) => TResult1 | PromiseLike<TResult1>) | null,
+    onReject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2>;
+  catch<TResult = never>(
+    onReject?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null,
+  ): Promise<QueryResult | TResult>;
+}
+
 export function createFakeSupabase() {
   const tables: Tables = {
     profiles: [], plans: [], sessions: [], metrics: [], favorites: [],
@@ -24,71 +42,88 @@ export function createFakeSupabase() {
     if (!networkUp) throw new Error('network failure (fake)');
   }
 
-  function builder(tableName: string) {
+  function builder(tableName: string): Builder {
     const filters: { col: string; val: unknown }[] = [];
     let action: 'select' | 'insert' | 'update' | 'delete' | 'upsert' = 'select';
     let payload: Row | Row[] | undefined;
     let selectedAfter = false;
+    let cached: Promise<QueryResult> | null = null;
 
-    const api: any = {
+    function execute(): QueryResult {
+      requireNetwork();
+      const arr = tables[tableName] ?? (tables[tableName] = []);
+      const match = (r: Row) =>
+        filters.every((f) => (r as Record<string, unknown>)[f.col] === f.val);
+
+      if (action === 'select') {
+        const data = arr.filter(match).map((r) => ({ ...r }));
+        return { data, error: null };
+      }
+      if (action === 'insert') {
+        const rows = Array.isArray(payload) ? payload : [payload!];
+        const stamped = rows.map((r) => ({ ...r, updated_at: nowIso() }));
+        arr.push(...stamped);
+        return { data: stamped.map((r) => ({ ...r })), error: null };
+      }
+      if (action === 'update') {
+        const updated: Row[] = [];
+        for (const r of arr) {
+          if (match(r)) {
+            Object.assign(r, payload, { updated_at: nowIso() });
+            updated.push({ ...r });
+          }
+        }
+        return { data: selectedAfter ? updated : null, error: null };
+      }
+      if (action === 'delete') {
+        const remaining: Row[] = [];
+        const deleted: Row[] = [];
+        for (const r of arr) { if (match(r)) deleted.push({ ...r }); else remaining.push(r); }
+        tables[tableName] = remaining;
+        return { data: deleted, error: null };
+      }
+      if (action === 'upsert') {
+        const rows = Array.isArray(payload) ? payload : [payload!];
+        const stamped: Row[] = [];
+        for (const r of rows) {
+          const idx = arr.findIndex((x) => x.id === r.id);
+          if (idx >= 0) {
+            Object.assign(arr[idx], r, { updated_at: nowIso() });
+            stamped.push({ ...arr[idx] });
+          } else {
+            const row = { ...r, updated_at: nowIso() };
+            arr.push(row);
+            stamped.push({ ...row });
+          }
+        }
+        return { data: stamped, error: null };
+      }
+      return { data: null, error: null };
+    }
+
+    const api: Builder = {
       select(_cols?: string) {
+        void _cols;
         if (action === 'select') { action = 'select'; }
         else { selectedAfter = true; }
         return api;
       },
       eq(col: string, val: unknown) { filters.push({ col, val }); return api; },
-      insert(row: Row | Row[]) { action = 'insert'; payload = row; return api;  },
+      insert(row: Row | Row[]) { action = 'insert'; payload = row; return api; },
       update(row: Row) { action = 'update'; payload = row; return api; },
       upsert(row: Row | Row[]) { action = 'upsert'; payload = row; return api; },
       delete() { action = 'delete'; return api; },
-      then(onResolve: (r: { data: Row[] | null; error: Error | null }) => unknown,
-           onReject?: (e: Error) => unknown) {
-        try {
-          requireNetwork();
-          const arr = tables[tableName] ?? (tables[tableName] = []);
-          const match = (r: Row) => filters.every((f) => (r as any)[f.col] === f.val);
-
-          if (action === 'select') {
-            const data = arr.filter(match);
-            return Promise.resolve({ data, error: null }).then(onResolve, onReject);
-          }
-          if (action === 'insert') {
-            const rows = Array.isArray(payload) ? payload : [payload!];
-            const stamped = rows.map((r) => ({ ...r, updated_at: nowIso() }));
-            arr.push(...stamped);
-            return Promise.resolve({ data: stamped, error: null }).then(onResolve, onReject);
-          }
-          if (action === 'update') {
-            const updated: Row[] = [];
-            for (const r of arr) {
-              if (match(r)) {
-                Object.assign(r, payload, { updated_at: nowIso() });
-                updated.push(r);
-              }
-            }
-            return Promise.resolve({ data: selectedAfter ? updated : null, error: null })
-              .then(onResolve, onReject);
-          }
-          if (action === 'delete') {
-            const remaining: Row[] = [];
-            const deleted: Row[] = [];
-            for (const r of arr) { if (match(r)) deleted.push(r); else remaining.push(r); }
-            tables[tableName] = remaining;
-            return Promise.resolve({ data: deleted, error: null }).then(onResolve, onReject);
-          }
-          if (action === 'upsert') {
-            const rows = Array.isArray(payload) ? payload : [payload!];
-            for (const r of rows) {
-              const idx = arr.findIndex((x) => x.id === r.id);
-              if (idx >= 0) { Object.assign(arr[idx], r, { updated_at: nowIso() }); }
-              else { arr.push({ ...r, updated_at: nowIso() }); }
-            }
-            return Promise.resolve({ data: rows, error: null }).then(onResolve, onReject);
-          }
-          return Promise.resolve({ data: null, error: null }).then(onResolve, onReject);
-        } catch (e) {
-          return Promise.reject(e as Error).then(undefined, onReject);
+      then(onResolve, onReject) {
+        if (!cached) {
+          cached = new Promise<QueryResult>((resolve, reject) => {
+            try { resolve(execute()); }
+            catch (e) { reject(e as Error); }
+          });
         }
+        return cached.then(onResolve ?? undefined, onReject ?? undefined);
+      },
+      catch(onReject) {
+        return this.then(undefined, onReject ?? undefined);
       },
     };
     return api;
@@ -103,7 +138,8 @@ export function createFakeSupabase() {
           const i = listeners.indexOf(cb); if (i >= 0) listeners.splice(i, 1);
         } } } };
       },
-      async signInWithOtp(_args: { email: string }) {
+      async signInWithOtp(args: { email: string }) {
+        void args;
         requireNetwork();
         return { data: {}, error: null };
       },
