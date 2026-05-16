@@ -38,8 +38,15 @@ VITE_SUPABASE_ANON_KEY=YOUR-ANON-KEY
 
 - [ ] **Step 3: Confirm `.env.local` is gitignored**
 
-Run: `grep -E '^\.env(\.local)?$' /home/ubuntu/AhKeung/.gitignore || echo MISSING`
-If output is `MISSING`, append `.env.local` to `.gitignore`. Otherwise leave alone.
+Vite's `.gitignore` template uses `*.local` (matches `.env.local`, `.env.development.local`, etc.). Check:
+
+```bash
+cd /home/ubuntu/AhKeung && \
+  { grep -qE '(^|/)\*\.local$|(^|/)\.env\.local$' .gitignore && echo OK; } \
+  || echo MISSING
+```
+
+If `MISSING`, append a single line `.env.local` to `.gitignore`. Otherwise leave it alone — don't add a duplicate.
 
 - [ ] **Step 4: Commit**
 
@@ -51,59 +58,110 @@ git commit -m "Install @supabase/supabase-js, add .env.example"
 
 ---
 
-### Task 2: Create the Supabase client and add Workbox NetworkOnly rule
+### Task 2: Create the Supabase indirection module + Workbox NetworkOnly rule
 
 **Files:**
 - Create: `src/supabase.ts`
-- Modify: `vite.config.ts` (add a `runtimeCaching` entry)
+- Modify: `vite.config.ts` (Workbox rule baked from build-time constant)
+
+The client lives behind a `getSupabase()` function and a `setSupabase()` injection point. Production code calls `getSupabase()` at the moment it needs the client, not at module load. Tests inject a fake via `setSupabase()` in `beforeEach`. This avoids the `vi.doMock` static-import trap entirely — there is only ever **one** module to reference, and the function call resolves the implementation late.
 
 - [ ] **Step 1: Create `src/supabase.ts`**
 
 ```ts
 // src/supabase.ts
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const url = import.meta.env.VITE_SUPABASE_URL;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+let _client: SupabaseClient | null = null;
 
-if (!url || !anonKey) {
-  throw new Error(
-    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Copy .env.example to .env.local and fill them in.',
-  );
+function buildRealClient(): SupabaseClient {
+  const url = import.meta.env.VITE_SUPABASE_URL;
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    throw new Error(
+      'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Copy .env.example to .env.local and fill them in.',
+    );
+  }
+  return createClient(url, anonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  });
 }
 
-export const supabase = createClient(url, anonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+export function getSupabase(): SupabaseClient {
+  if (!_client) _client = buildRealClient();
+  return _client;
+}
 
-// Exposed so the Workbox runtime cache rule (and tests) can check origin.
-export const SUPABASE_URL_ORIGIN = new URL(url).origin;
+/** Test-only: inject a fake client and reset the cached one. */
+export function setSupabase(client: SupabaseClient | null): void {
+  _client = client;
+}
 ```
 
-- [ ] **Step 2: Add Workbox `NetworkOnly` rule for Supabase**
+Note the absence of a `supabase` named export. Every caller uses `getSupabase()`. If a callsite ever appears to need a stable binding (e.g. for `onAuthStateChange` subscription cleanup), it should call `getSupabase()` once and hold the local result.
 
-Modify `/home/ubuntu/AhKeung/vite.config.ts`. Inside the existing `VitePWA({ workbox: { runtimeCaching: [...] } })` array, prepend a new entry **before** the existing `exercise-images` entry:
+- [ ] **Step 2: Add Workbox `NetworkOnly` rule, baked at config time**
+
+`process.env.VITE_*` is **not** inlined into the service-worker bundle — only `import.meta.env.*` is, and only in app code, not in Workbox's serialized callbacks. We capture the origin at `defineConfig` time (where `process.env` does exist) and bake it into a literal `RegExp` for the SW.
+
+Modify `/home/ubuntu/AhKeung/vite.config.ts`:
 
 ```ts
-{
-  // Never serve cached Supabase responses to the sync worker.
-  // Without this, a stale-while-revalidate hit corrupts local state.
-  urlPattern: ({ url }) =>
-    !!process.env.VITE_SUPABASE_URL &&
-    url.origin === new URL(process.env.VITE_SUPABASE_URL).origin,
-  handler: 'NetworkOnly',
-},
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
+
+const supabaseOrigin = process.env.VITE_SUPABASE_URL
+  ? new URL(process.env.VITE_SUPABASE_URL).origin
+  : null;
+
+// Escape regex metachars in the origin string.
+function escapeRegex(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+const supabaseUrlPattern = supabaseOrigin
+  ? new RegExp(`^${escapeRegex(supabaseOrigin)}/`)
+  : /a^/;  // matches nothing when no Supabase URL is configured
+
+export default defineConfig({
+  plugins: [
+    react(),
+    VitePWA({
+      // …existing options unchanged…
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,json}'],
+        maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
+        runtimeCaching: [
+          {
+            // Never serve cached Supabase responses to the sync worker.
+            urlPattern: supabaseUrlPattern,
+            handler: 'NetworkOnly',
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/gh\/yuhonas\/free-exercise-db/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'exercise-images',
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 60 },
+            },
+          },
+        ],
+      },
+      // …existing manifest etc. unchanged…
+    }),
+  ],
+  server: { host: true, port: 5173 },
+});
 ```
 
-(Workbox `runtimeCaching` callbacks run in the SW context, so we can't use `import.meta.env` there — we use `process.env` which Vite makes available at build time. The `!!` guard avoids a crash when `VITE_SUPABASE_URL` is unset in CI.)
+(Preserve the existing `manifest` block from the current file — only the `runtimeCaching` array and the top-of-file constants are new.)
 
-- [ ] **Step 3: Verify the client loads in dev**
+- [ ] **Step 3: Verify the build inlines the literal**
 
-Create a temporary `.env.local` with placeholder values just to satisfy the throw:
+Create a temporary `.env.local` for the build to capture an origin:
 
 ```env
 VITE_SUPABASE_URL=https://placeholder.supabase.co
@@ -111,13 +169,13 @@ VITE_SUPABASE_ANON_KEY=placeholder
 ```
 
 Run: `cd /home/ubuntu/AhKeung && npx vite build`
-Expected: build succeeds. Delete `.env.local` afterward (or leave it for the real Supabase task).
+Expected: build succeeds. Then: `grep -r "placeholder.supabase.co" dist/sw* 2>/dev/null | head -3` should show the literal baked into the SW bundle. Delete `.env.local` after.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add src/supabase.ts vite.config.ts
-git commit -m "Add Supabase client + Workbox NetworkOnly rule for Supabase origin"
+git commit -m "Supabase: getSupabase()/setSupabase() indirection + build-time Workbox NetworkOnly rule"
 ```
 
 ---
@@ -927,7 +985,7 @@ git commit -m "Add in-memory fake Supabase client for tests"
 
 ```ts
 // src/test/authStub.ts
-import { vi } from 'vitest';
+import { setSupabase } from '../supabase';
 import { createFakeSupabase, type FakeSupabase } from './fakeSupabase';
 
 let activeFake: FakeSupabase | null = null;
@@ -939,23 +997,27 @@ export function stubAuthenticatedUser(opts: {
   fake.deliverMagicLink(opts.email ?? 'test@example.com', opts.id);
   if (opts.isTrainer) fake.setTrainer(opts.id, true);
   activeFake = fake;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setSupabase(fake.client as any);
+  return fake;
+}
 
-  // Replace the real client with the fake by mocking the module.
-  vi.doMock('../supabase', () => ({
-    supabase: fake.client,
-    SUPABASE_URL_ORIGIN: 'https://fake.supabase.co',
-  }));
+export function stubUnauthenticated(): FakeSupabase {
+  const fake = createFakeSupabase();
+  activeFake = fake;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setSupabase(fake.client as any);
   return fake;
 }
 
 export function getActiveFake(): FakeSupabase {
-  if (!activeFake) throw new Error('stubAuthenticatedUser not called');
+  if (!activeFake) throw new Error('stubAuthenticatedUser/stubUnauthenticated not called');
   return activeFake;
 }
 
 export function clearAuthStub() {
   activeFake = null;
-  vi.doUnmock('../supabase');
+  setSupabase(null);
 }
 ```
 
@@ -1115,7 +1177,7 @@ git commit -m "Add sync mapping layer (snake_case <-> camelCase, forward-compat)
 
 ---
 
-### Task 10: Implement `syncMeta.ts` (per-table lastPulledAt + lastPulledId)
+### Task 10: Implement `syncMeta.ts` (per-table cursor: lastPulledAt + lastSeenIds)
 
 **Files:**
 - Create: `src/sync/syncMeta.ts`
@@ -1133,20 +1195,20 @@ import { getCursor, setCursor } from './syncMeta';
 beforeEach(async () => { await db.delete(); await db.open(); });
 
 describe('syncMeta cursor', () => {
-  it('returns nulls when nothing stored', async () => {
-    expect(await getCursor('plans')).toEqual({ lastPulledAt: null, lastPulledId: null });
+  it('returns empty when nothing stored', async () => {
+    expect(await getCursor('plans')).toEqual({ lastPulledAt: null, lastSeenIds: [] });
   });
 
-  it('persists and retrieves a cursor', async () => {
-    await setCursor('plans', { lastPulledAt: '2025-03-10T00:00:00.000Z', lastPulledId: 'p1' });
+  it('persists and retrieves a cursor with lastSeenIds', async () => {
+    await setCursor('plans', { lastPulledAt: '2025-03-10T00:00:00.000Z', lastSeenIds: ['p1', 'p2'] });
     expect(await getCursor('plans')).toEqual({
-      lastPulledAt: '2025-03-10T00:00:00.000Z', lastPulledId: 'p1',
+      lastPulledAt: '2025-03-10T00:00:00.000Z', lastSeenIds: ['p1', 'p2'],
     });
   });
 
   it('keeps per-table cursors independent', async () => {
-    await setCursor('plans',    { lastPulledAt: 'A', lastPulledId: 'pa' });
-    await setCursor('sessions', { lastPulledAt: 'B', lastPulledId: 'pb' });
+    await setCursor('plans',    { lastPulledAt: 'A', lastSeenIds: ['pa'] });
+    await setCursor('sessions', { lastPulledAt: 'B', lastSeenIds: ['pb'] });
     expect((await getCursor('plans')).lastPulledAt).toBe('A');
     expect((await getCursor('sessions')).lastPulledAt).toBe('B');
   });
@@ -1167,14 +1229,14 @@ import { db, type SyncTableName } from '../db';
 
 export interface Cursor {
   lastPulledAt: string | null;  // ISO timestamp from server
-  lastPulledId: string | null;
+  lastSeenIds: string[];        // IDs at the boundary timestamp already merged
 }
 
 function key(table: SyncTableName) { return `${table}.cursor`; }
 
 export async function getCursor(table: SyncTableName): Promise<Cursor> {
   const row = await db.syncMeta.get(key(table));
-  return (row?.value as Cursor | undefined) ?? { lastPulledAt: null, lastPulledId: null };
+  return (row?.value as Cursor | undefined) ?? { lastPulledAt: null, lastSeenIds: [] };
 }
 
 export async function setCursor(table: SyncTableName, cursor: Cursor): Promise<void> {
@@ -1453,7 +1515,7 @@ Expected: FAIL.
 Create `/home/ubuntu/AhKeung/src/sync/pushWorker.ts`:
 
 ```ts
-import { supabase } from '../supabase';
+import { getSupabase } from '../supabase';
 import { db, type SyncQueueRow, type SyncTableName } from '../db';
 import { toServerRow } from './mapping';
 import { parseFavoriteRowId } from './putWithSync';
@@ -1482,7 +1544,7 @@ export async function runPushOnce(): Promise<void> {
       const local = await localRowFor(entry);
       if (!local) { await db.syncQueue.delete(entry.seq!); continue; }
       const payload = toServerRow(local);
-      const res = await supabase.from(entry.table).insert(payload).select() as
+      const res = await getSupabase().from(entry.table).insert(payload).select() as
         { data: { updated_at: string }[] | null; error: { message: string } | null };
       if (res.error) throw new Error(res.error.message);
       const inserted = res.data?.[0];
@@ -1563,7 +1625,7 @@ if (entry.op === 'update') {
   if (!local) { await db.syncQueue.delete(entry.seq!); continue; }
   const payload = toServerRow(local);
   // Build conditional WHERE
-  let q = supabase.from(entry.table).update(payload).eq('id', entry.rowId);
+  let q = getSupabase().from(entry.table).update(payload).eq('id', entry.rowId);
   if (entry.expectedServerVersion !== null) {
     q = q.eq('updated_at', entry.expectedServerVersion);
   }
@@ -1588,12 +1650,9 @@ if (entry.op === 'update') {
 Run: `npm test -- src/sync/pushWorker.test.ts`
 Expected: 2 pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Don't commit yet**
 
-```bash
-git add src/sync/pushWorker.ts src/sync/pushWorker.test.ts
-git commit -m "Push worker: update path with optimistic concurrency"
-```
+The worker now contains an unreachable `throw` on the conflict path. Tests pass because no test triggers a conflict — but production code would crash. Task 14 replaces the throw with real conflict handling. **Hold off on committing until then.**
 
 ---
 
@@ -1651,7 +1710,7 @@ In `src/sync/pushWorker.ts`, find the `// Conflict path — handled in Task 14` 
 ```ts
 // Conflict: server's updated_at moved. Pull latest, update
 // expectedServerVersion on the queue row, and let the next iteration retry.
-const pulled = await supabase.from(entry.table).select('*').eq('id', entry.rowId)
+const pulled = await getSupabase().from(entry.table).select('*').eq('id', entry.rowId)
   as { data: Record<string, unknown>[] | null; error: { message: string } | null };
 if (pulled.error) throw new Error(pulled.error.message);
 const serverRow = pulled.data?.[0];
@@ -1696,12 +1755,16 @@ async function moveToDeadLetter(entry: SyncQueueRow, reason: string): Promise<vo
 Run: `npm test -- src/sync/pushWorker.test.ts`
 Expected: 3 pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit Task 13 + Task 14 together**
 
 ```bash
 git add src/sync/pushWorker.ts src/sync/pushWorker.test.ts
-git commit -m "Push worker: pull-and-replay on optimistic-concurrency conflict"
+git commit -m "Push worker: update path with optimistic concurrency + pull-and-replay on conflict"
 ```
+
+**v1 conflict semantics note.** This implementation pulls the server's current `updated_at` on conflict and re-pushes the local row's data verbatim. It does **not** merge the server's field changes into the local row before pushing. Concretely: if device A edits `name` and device B edits `notes` on the same row, whichever lands second overwrites the other's field. This is **row-level last-writer-wins**, not field-level merge.
+
+The trade-off is deliberate for v1: field-level merge requires per-field dirty tracking (which fields the user actually changed in this session) that this codebase doesn't have. Task 25's integration test asserts this behavior explicitly so it doesn't drift later. Spec §5 "Conflict resolution — summary" describes this as "pull-then-replay"; that's slightly aspirational — what we actually build is "pull-version-pointer-then-replay." Acceptable for the gym's single-writer-per-row reality.
 
 ---
 
@@ -1829,7 +1892,7 @@ export async function runPushOnce(): Promise<void> {
         const local = await localRowFor(entry);
         if (!local) { await db.syncQueue.delete(entry.seq!); continue; }
         const payload = toServerRow(local);
-        const res = await supabase.from(entry.table).insert(payload).select() as
+        const res = await getSupabase().from(entry.table).insert(payload).select() as
           { data: { updated_at: string }[] | null; error: { message: string } | null };
         if (res.error) throw new Error(res.error.message);
         const inserted = res.data?.[0];
@@ -1841,7 +1904,7 @@ export async function runPushOnce(): Promise<void> {
         const local = await localRowFor(entry);
         if (!local) { await db.syncQueue.delete(entry.seq!); continue; }
         const payload = toServerRow(local);
-        let q = supabase.from(entry.table).update(payload).eq('id', entry.rowId);
+        let q = getSupabase().from(entry.table).update(payload).eq('id', entry.rowId);
         if (entry.expectedServerVersion !== null) {
           q = q.eq('updated_at', entry.expectedServerVersion);
         }
@@ -1853,7 +1916,7 @@ export async function runPushOnce(): Promise<void> {
           await db.syncQueue.delete(entry.seq!);
         } else {
           // Conflict — pull latest, advance expectedServerVersion, retry.
-          const pulled = await supabase.from(entry.table).select('*').eq('id', entry.rowId)
+          const pulled = await getSupabase().from(entry.table).select('*').eq('id', entry.rowId)
             as { data: Record<string, unknown>[] | null; error: { message: string } | null };
           const serverRow = pulled.data?.[0];
           if (!serverRow) {
@@ -1874,7 +1937,7 @@ export async function runPushOnce(): Promise<void> {
           entries.unshift(refreshed);
         }
       } else if (entry.op === 'delete') {
-        let q = supabase.from(entry.table)
+        let q = getSupabase().from(entry.table)
           .update({ deleted_at: new Date().toISOString() })
           .eq('id', entry.rowId);
         if (entry.expectedServerVersion !== null) {
@@ -1882,8 +1945,28 @@ export async function runPushOnce(): Promise<void> {
         }
         const res = await q.select() as { data: unknown[] | null; error: { message: string } | null };
         if (res.error) throw new Error(res.error.message);
-        // If the conditional missed (already deleted or moved), treat as success — local is already gone.
-        await db.syncQueue.delete(entry.seq!);
+        if (res.data && res.data.length > 0) {
+          await db.syncQueue.delete(entry.seq!);
+        } else {
+          // Conditional missed — server moved since we pulled. Pull current
+          // updated_at, advance expectedServerVersion, retry.
+          const pulled = await getSupabase().from(entry.table).select('updated_at').eq('id', entry.rowId)
+            as { data: { updated_at: string }[] | null };
+          const serverRow = pulled.data?.[0];
+          if (!serverRow) {
+            await db.syncQueue.delete(entry.seq!);  // already gone server-side
+            continue;
+          }
+          const conflictAttempts = (entry.attempts ?? 0) + 1;
+          if (conflictAttempts >= 3) {
+            await moveToDeadLetter(entry, 'delete conflict');
+            continue;
+          }
+          await db.syncQueue.update(entry.seq!, {
+            expectedServerVersion: serverRow.updated_at, attempts: conflictAttempts,
+          });
+          entries.unshift((await db.syncQueue.get(entry.seq!))!);
+        }
       }
     } catch (err) {
       const kind = classifyError(err);
@@ -1985,7 +2068,7 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     const local = await localRowFor(entry);
     if (!local) { await db.syncQueue.delete(entry.seq!); return; }
     const payload = toServerRow(local);
-    const res = await supabase.from(entry.table).insert(payload).select() as
+    const res = await getSupabase().from(entry.table).insert(payload).select() as
       { data: { updated_at: string }[] | null; error: { message: string } | null };
     if (res.error) throw new Error(res.error.message);
     const inserted = res.data?.[0];
@@ -1997,7 +2080,7 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     const local = await localRowFor(entry);
     if (!local) { await db.syncQueue.delete(entry.seq!); return; }
     const payload = toServerRow(local);
-    let q = supabase.from(entry.table).update(payload).eq('id', entry.rowId);
+    let q = getSupabase().from(entry.table).update(payload).eq('id', entry.rowId);
     if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);
     const res = await q.select() as { data: { updated_at: string }[] | null; error: { message: string } | null };
     if (res.error) throw new Error(res.error.message);
@@ -2007,7 +2090,7 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
       await db.syncQueue.delete(entry.seq!);
       return;
     }
-    const pulled = await supabase.from(entry.table).select('*').eq('id', entry.rowId)
+    const pulled = await getSupabase().from(entry.table).select('*').eq('id', entry.rowId)
       as { data: Record<string, unknown>[] | null; error: { message: string } | null };
     const serverRow = pulled.data?.[0];
     if (!serverRow) { await db.syncQueue.delete(entry.seq!); return; }
@@ -2021,11 +2104,26 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     return;
   }
   if (entry.op === 'delete') {
-    let q = supabase.from(entry.table).update({ deleted_at: new Date().toISOString() }).eq('id', entry.rowId);
+    let q = getSupabase().from(entry.table).update({ deleted_at: new Date().toISOString() }).eq('id', entry.rowId);
     if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);
     const res = await q.select() as { data: unknown[] | null; error: { message: string } | null };
     if (res.error) throw new Error(res.error.message);
-    await db.syncQueue.delete(entry.seq!);
+    if (res.data && res.data.length > 0) {
+      await db.syncQueue.delete(entry.seq!);
+      return;
+    }
+    // Conditional missed — server moved since we pulled. Mirror the update path:
+    // pull the current updated_at, advance expectedServerVersion, retry once.
+    const pulled = await getSupabase().from(entry.table).select('updated_at').eq('id', entry.rowId)
+      as { data: { updated_at: string }[] | null };
+    const serverRow = pulled.data?.[0];
+    if (!serverRow) { await db.syncQueue.delete(entry.seq!); return; }  // already gone server-side
+    const conflictAttempts = (entry.attempts ?? 0) + 1;
+    if (conflictAttempts >= 3) { await moveToDeadLetter(entry, 'delete conflict'); return; }
+    await db.syncQueue.update(entry.seq!, {
+      expectedServerVersion: serverRow.updated_at, attempts: conflictAttempts,
+    });
+    entries.unshift((await db.syncQueue.get(entry.seq!))!);
   }
 }
 
@@ -2042,7 +2140,7 @@ export async function runPushOnce(): Promise<void> {
         const kind = classifyError(err);
         if (kind === 'auth' && attempt === 0) {
           attempt++;
-          await supabase.auth.refreshSession();
+          await getSupabase().auth.refreshSession();
           continue;  // one retry after refresh
         }
         if (kind === 'fatal') {
@@ -2168,10 +2266,12 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement `pullWorker.ts`**
 
+The cursor pattern uses `gte('updated_at', …)` (greater-or-equal) plus a `lastSeenIds` set of rows already processed at the boundary timestamp. This sidesteps PostgREST's awkward `.or()` quoting rules (which would mishandle the periods in ISO timestamps) and still handles same-millisecond ties correctly. The `Cursor` shape and tests for it are already in Task 10.
+
 Create `/home/ubuntu/AhKeung/src/sync/pullWorker.ts`:
 
 ```ts
-import { supabase } from '../supabase';
+import { getSupabase } from '../supabase';
 import { db, type SyncTableName } from '../db';
 import { fromServerRow } from './mapping';
 import { getCursor, setCursor } from './syncMeta';
@@ -2179,7 +2279,7 @@ import { favoriteRowId } from './putWithSync';
 
 const TABLES: SyncTableName[] = ['plans', 'sessions', 'metrics', 'favorites'];
 
-async function rowIdOf(table: SyncTableName, row: Record<string, unknown>): Promise<string> {
+function rowKeyOf(table: SyncTableName, row: Record<string, unknown>): string {
   if (table === 'favorites') return favoriteRowId(row.user_id as string, row.exercise_id as string);
   return row.id as string;
 }
@@ -2190,7 +2290,7 @@ async function hasPending(table: SyncTableName, rowId: string): Promise<boolean>
 }
 
 async function mergeRow(table: SyncTableName, serverRow: Record<string, unknown>, userId: string): Promise<void> {
-  const rowId = await rowIdOf(table, serverRow);
+  const rowId = rowKeyOf(table, serverRow);
   if (await hasPending(table, rowId)) return;
 
   if (serverRow.deleted_at) {
@@ -2211,44 +2311,55 @@ async function mergeRow(table: SyncTableName, serverRow: Record<string, unknown>
 }
 
 export async function runPullOnce(): Promise<void> {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await getSupabase().auth.getSession();
   const userId = session?.user?.id;
   if (!userId) return;
 
   for (const table of TABLES) {
     let cursor = await getCursor(table);
-    // Keyset pagination loop.
+    let seen = new Set(cursor.lastSeenIds);
+    const PAGE = 500;
+
     while (true) {
-      const PAGE = 500;
-      let q = supabase.from(table).select('*').eq('user_id', userId)
+      let q = getSupabase().from(table).select('*').eq('user_id', userId)
         .order('updated_at', { ascending: true })
         .order(table === 'favorites' ? 'exercise_id' : 'id', { ascending: true })
         .limit(PAGE);
-      if (cursor.lastPulledAt && cursor.lastPulledId) {
-        // (updated_at, id) > (lastPulledAt, lastPulledId).
-        // PostgREST doesn't expose row-tuple comparison directly; emulate with OR.
-        q = q.or(
-          `updated_at.gt.${cursor.lastPulledAt},and(updated_at.eq.${cursor.lastPulledAt},${table === 'favorites' ? 'exercise_id' : 'id'}.gt.${cursor.lastPulledId})`,
-        );
-      } else if (cursor.lastPulledAt) {
-        q = q.gt('updated_at', cursor.lastPulledAt);
-      }
+      if (cursor.lastPulledAt) q = q.gte('updated_at', cursor.lastPulledAt);
       const res = await q as { data: Record<string, unknown>[] | null; error: { message: string } | null };
       if (res.error) throw new Error(res.error.message);
       const rows = res.data ?? [];
-      for (const r of rows) await mergeRow(table, r, userId);
       if (rows.length === 0) break;
+
+      let processed = 0;
+      for (const r of rows) {
+        const key = rowKeyOf(table, r);
+        // Skip rows we already processed at the boundary timestamp.
+        if (cursor.lastPulledAt && r.updated_at === cursor.lastPulledAt && seen.has(key)) continue;
+        await mergeRow(table, r, userId);
+        processed++;
+      }
+
+      // Advance cursor to the page's last row's updated_at, accumulating IDs at that boundary.
       const last = rows[rows.length - 1];
-      cursor = {
-        lastPulledAt: last.updated_at as string,
-        lastPulledId: (table === 'favorites' ? last.exercise_id : last.id) as string,
-      };
+      const newAt = last.updated_at as string;
+      if (newAt === cursor.lastPulledAt) {
+        for (const r of rows) if (r.updated_at === newAt) seen.add(rowKeyOf(table, r));
+      } else {
+        seen = new Set();
+        for (const r of rows) if (r.updated_at === newAt) seen.add(rowKeyOf(table, r));
+      }
+      cursor = { lastPulledAt: newAt, lastSeenIds: [...seen] };
       await setCursor(table, cursor);
+
       if (rows.length < PAGE) break;
+      if (processed === 0) break;  // entire page was already-seen rows — done
     }
   }
 }
 ```
+
+The `lastSeenIds` set is bounded by however many rows share a single `updated_at` value, which in practice is 0–2 (microsecond timestamps + per-row triggers). It would only balloon under a batch import scenario that doesn't exist in v1.
 
 - [ ] **Step 4: Run, all pass**
 
@@ -2411,12 +2522,8 @@ describe('AuthProvider', () => {
   });
 
   it('reports unauthenticated when no session', async () => {
-    // Don't call stubAuthenticatedUser — use a fresh fake with no session.
-    const { createFakeSupabase } = await import('../test/fakeSupabase');
-    const { vi } = await import('vitest');
-    const fake = createFakeSupabase();
-    vi.doMock('../supabase', () => ({ supabase: fake.client, SUPABASE_URL_ORIGIN: 'x' }));
-
+    const { stubUnauthenticated } = await import('../test/authStub');
+    stubUnauthenticated();
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => expect(screen.getByText(/status=unauthenticated/)).toBeInTheDocument());
   });
@@ -2457,32 +2564,55 @@ export function useAuth(): AuthState {
 Create `/home/ubuntu/AhKeung/src/auth/AuthProvider.tsx`:
 
 ```tsx
-import { useEffect, useState, type ReactNode } from 'react';
-import { supabase } from '../supabase';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { getSupabase } from '../supabase';
 import { db } from '../db';
+import { stopSync, flushNow } from '../sync';
 import { AuthContext, type AuthState, type Profile } from './useAuth';
 
 const LAST_PROFILE_KEY = 'ahKeung.lastKnownProfile';
 
 async function fetchProfile(userId: string): Promise<Profile | null> {
-  const res = await supabase.from('profiles').select('id, display_name, is_trainer').eq('id', userId) as
+  const res = await getSupabase().from('profiles').select('id, display_name, is_trainer').eq('id', userId) as
     { data: { id: string; display_name: string | null; is_trainer: boolean }[] | null };
   const row = res.data?.[0];
   if (!row) return null;
   return { id: row.id, displayName: row.display_name, isTrainer: row.is_trainer };
 }
 
+/** Sign-out helper. Stops sync first, attempts to drain the queue, optionally
+ * confirms data loss, then triggers `auth.signOut()`. The actual Dexie wipe
+ * + localStorage clear + state reset happen in the `SIGNED_OUT` handler
+ * below — keeping the wipe in exactly one place avoids a race.
+ *
+ * `confirmFn` lets callers swap a UI confirmation for a stub in tests. */
+async function performSignOut(confirmFn: (msg: string) => boolean = window.confirm): Promise<boolean> {
+  stopSync();                       // (1) stop timers/listeners so nothing races the wipe
+  try { await flushNow(); } catch { /* network down — fall through */ }
+  const pending = await db.syncQueue.count();
+  if (pending > 0) {
+    const ok = confirmFn(`You have ${pending} unsynced change${pending === 1 ? '' : 's'}. Sign out anyway? They will be lost.`);
+    if (!ok) return false;
+  }
+  await getSupabase().auth.signOut();  // fires SIGNED_OUT → handler does the wipe
+  return true;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({
     status: 'loading', user: null, profile: null, signOut: async () => {},
   });
+  // Refs so the visibilitychange handler always sees the latest user without
+  // re-binding (which would tear down the listener on every state change).
+  const userIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session } } = await getSupabase().auth.getSession();
       if (!session) {
+        userIdRef.current = null;
         if (!cancelled) setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
         return;
       }
@@ -2494,39 +2624,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const cached = localStorage.getItem(LAST_PROFILE_KEY);
         if (cached) profile = JSON.parse(cached) as Profile;
       }
-      if (!cancelled) setState({
+      if (cancelled) return;
+      userIdRef.current = session.user.id;
+      setState({
         status: 'authenticated',
         user: { id: session.user.id, email: session.user.email ?? '' },
         profile,
-        signOut: async () => {
-          await supabase.auth.signOut();
-          await db.delete(); await db.open();
-          localStorage.removeItem(LAST_PROFILE_KEY);
-        },
+        signOut: async () => { await performSignOut(); },
       });
     }
 
     bootstrap();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = getSupabase().auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
+        // Token expired server-side. We can't drain the queue (no auth) — best
+        // effort: stop sync first to avoid a race with the wipe.
+        stopSync();
         await db.delete(); await db.open();
         localStorage.removeItem(LAST_PROFILE_KEY);
+        userIdRef.current = null;
         setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
         return;
       }
       if (event === 'SIGNED_IN' && session) await bootstrap();
     });
 
-    const onVisible = () => {
-      if (document.visibilityState === 'visible' && state.user) {
-        fetchProfile(state.user.id).then((p) => {
-          if (p) {
-            localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(p));
-            setState((s) => ({ ...s, profile: p }));
-          }
-        }).catch(() => {});
-      }
+    const onVisible = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const userId = userIdRef.current;
+      if (!userId) return;
+      try {
+        const p = await fetchProfile(userId);
+        if (p) {
+          localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(p));
+          setState((s) => ({ ...s, profile: p }));
+        }
+      } catch { /* offline; ignore */ }
     };
     document.addEventListener('visibilitychange', onVisible);
 
@@ -2541,6 +2675,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={state}>{children}</AuthContext.Provider>;
 }
 ```
+
+**Why these specific changes:**
+
+- The `userIdRef` pattern fixes the stale-closure bug: `onVisible` always reads the current value, never the one captured at mount.
+- `performSignOut` runs `stopSync()` → `flushNow()` → optional confirm → `auth.signOut()` → `db.delete()` in strict order. The sync orchestrator stops *before* anything touches the queue or Dexie, eliminating the race.
+- The `SIGNED_OUT` event from token expiry can't flush (the user has no auth) — but it can still `stopSync()` first to avoid a running pull crashing into the wipe.
+- `confirmFn` is parameterised so tests can pass a stub that always returns `true` without going through `window.confirm`. (The default keeps prod behavior.)
+
+**Task 21 still wires `startSync()` on `authenticated` and `stopSync()` on unmount**, but `performSignOut` now also calls `stopSync()` proactively — these are not redundant, because the Guarded effect's cleanup only fires *after* the React tree changes, which is after the wipe has already happened.
 
 - [ ] **Step 4: Run, pass**
 
@@ -2595,7 +2738,7 @@ Create `/home/ubuntu/AhKeung/src/auth/Login.tsx`:
 
 ```tsx
 import { useState } from 'react';
-import { supabase } from '../supabase';
+import { getSupabase } from '../supabase';
 
 export function Login() {
   const [email, setEmail] = useState('');
@@ -2608,7 +2751,7 @@ export function Login() {
     setError(null);
     setSending(true);
     try {
-      await supabase.auth.signInWithOtp({
+      await getSupabase().auth.signInWithOtp({
         email,
         options: { emailRedirectTo: window.location.origin },
       });
@@ -2765,7 +2908,7 @@ Create `/home/ubuntu/AhKeung/src/pages/Settings.tsx`:
 ```tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../supabase';
+import { getSupabase } from '../supabase';
 import { useAuth } from '../auth/useAuth';
 
 export function Settings() {
@@ -2791,7 +2934,7 @@ export function Settings() {
     if (!user) return;
     setSaving(true);
     try {
-      await supabase.from('profiles').update({ display_name: name }).eq('id', user.id);
+      await getSupabase().from('profiles').update({ display_name: name }).eq('id', user.id);
       setSavedAt(Date.now());
     } finally {
       setSaving(false);
@@ -2855,19 +2998,38 @@ git commit -m "Settings page: display name edit (online-only) + sign out + gear 
 
 ---
 
-### Task 23: Migrate write call sites to `putWithSync` / `deleteWithSync`
+### Task 23: Add `useCurrentUserId` hook + migrate write call sites
 
-This is a single task because the changes are mechanical and small per file.
+A one-line hook over `useAuth` gives every page write site the current user UUID without dynamic imports or repeated `getSession()` calls.
 
 **Files:**
-- Modify: `src/pages/PlanEditor.tsx` (lines ~25, ~88-98)
-- Modify: `src/pages/Workout.tsx` (lines ~19, ~105)
-- Modify: `src/pages/Metrics.tsx` (lines ~25, ~38)
-- Modify: `src/useFavorites.ts` (entire `toggleFavorite`)
+- Create: `src/auth/useCurrentUserId.ts`
+- Modify: `src/pages/PlanEditor.tsx`
+- Modify: `src/pages/Workout.tsx`
+- Modify: `src/pages/Metrics.tsx` (lines ~25, ~38, plus the JSX `m.id!` callsite at line ~155)
+- Modify: `src/useFavorites.ts`
 
-- [ ] **Step 1: `PlanEditor.tsx` — switch `Number(id)` to string, use UUIDs and `putWithSync`**
+- [ ] **Step 1: Create `useCurrentUserId.ts`**
 
-Replace the relevant lines in `/home/ubuntu/AhKeung/src/pages/PlanEditor.tsx`.
+Create `/home/ubuntu/AhKeung/src/auth/useCurrentUserId.ts`:
+
+```ts
+import { useAuth } from './useAuth';
+
+/** Returns the current user's UUID, or null if not signed in. */
+export function useCurrentUserId(): string | null {
+  return useAuth().user?.id ?? null;
+}
+```
+
+- [ ] **Step 2: `PlanEditor.tsx` — string IDs + `useCurrentUserId` + `putWithSync`**
+
+Add imports at the top of `/home/ubuntu/AhKeung/src/pages/PlanEditor.tsx`:
+
+```ts
+import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { putWithSync, deleteWithSync } from '../sync/putWithSync';
+```
 
 Replace (around line 25):
 ```ts
@@ -2880,36 +3042,22 @@ with:
 const { id } = useParams<{ id?: string }>();
 const navigate = useNavigate();
 const planId = id;
+const userId = useCurrentUserId();
 ```
 
-Replace the `existing` `useLiveQuery`:
-```ts
-const existing = useLiveQuery(
-  async () => (planId ? await db.plans.get(planId) : undefined),
-  [planId],
-);
-```
-(No change needed — the `get` accepts a string PK now.)
-
-Replace `loadedFromId` type (around line 35):
+Replace `loadedFromId` (around line 35):
 ```ts
 const [loadedFromId, setLoadedFromId] = useState<string | undefined>(undefined);
 ```
 
-Replace the `save` function:
+Replace `save`:
 ```ts
 const save = async () => {
-  if (!name.trim()) {
-    alert(t.planEditor.nameRequired);
-    return;
-  }
-  const userId = (await import('../supabase')).supabase.auth.getUser
-    ? (await (await import('../supabase')).supabase.auth.getSession()).data.session?.user?.id
-    : undefined;
+  if (!name.trim()) { alert(t.planEditor.nameRequired); return; }
   if (!userId) return;
-  const id = planId ?? crypto.randomUUID();
-  await (await import('../sync/putWithSync')).putWithSync('plans', {
-    id,
+  const newId = planId ?? crypto.randomUUID();
+  await putWithSync('plans', {
+    id: newId,
     name: name.trim(),
     weekStart,
     focus,
@@ -2920,34 +3068,47 @@ const save = async () => {
 };
 ```
 
-(The dynamic imports keep the diff localised. A future refactor can introduce a `useCurrentUserId()` hook to clean this up.)
-
 Replace `remove`:
 ```ts
 const remove = async () => {
   if (!planId) return;
   if (!confirm(t.planEditor.deleteConfirm)) return;
-  await (await import('../sync/putWithSync')).deleteWithSync('plans', planId);
+  await deleteWithSync('plans', planId);
   navigate('/plans');
 };
 ```
 
-- [ ] **Step 2: `Workout.tsx` — `planId` is now a string; use `putWithSync` on finish**
+- [ ] **Step 3: `Workout.tsx` — string `planId` + `putWithSync` on finish**
 
 In `/home/ubuntu/AhKeung/src/pages/Workout.tsx`:
 
-Replace `const { planId } = useParams<{ planId?: string }>();` block's `db.plans.get(Number(planId))` with `db.plans.get(planId)`.
+Add imports:
+```ts
+import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { putWithSync } from '../sync/putWithSync';
+```
 
-Replace the `finish` body:
+In the `useLiveQuery` for `plan`, the `Number(planId)` cast is gone — `planId` is already a string:
+
+```ts
+const plan = useLiveQuery(
+  async () => (planId ? await db.plans.get(planId) : undefined),
+  [planId],
+);
+```
+
+Above `finish`, add:
+```ts
+const userId = useCurrentUserId();
+```
+
+Replace `finish`:
 ```ts
 const finish = async () => {
   const done = session.exercises.some((e) => e.sets.some((s) => s.done));
-  if (!done) {
-    if (!confirm(t.workout.noSetsDoneConfirm)) return;
-  }
-  const userId = (await (await import('../supabase')).supabase.auth.getSession()).data.session?.user?.id;
+  if (!done) { if (!confirm(t.workout.noSetsDoneConfirm)) return; }
   if (!userId) return;
-  await (await import('../sync/putWithSync')).putWithSync('sessions', {
+  await putWithSync('sessions', {
     id: crypto.randomUUID(),
     planId: session.planId,
     date: session.date,
@@ -2960,18 +3121,27 @@ const finish = async () => {
 };
 ```
 
-- [ ] **Step 3: `Metrics.tsx` — adopt `putWithSync` and `deleteWithSync`**
+(`session.planId` is `string | undefined`; TypeScript catches it via the `WorkoutSession` change from Task 5.)
+
+- [ ] **Step 4: `Metrics.tsx` — `putWithSync`/`deleteWithSync` + JSX `m.id` cleanup**
+
+Add imports:
+```ts
+import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { putWithSync, deleteWithSync } from '../sync/putWithSync';
+```
+
+Add near the top of the component body:
+```ts
+const userId = useCurrentUserId();
+```
 
 Replace `save`:
 ```ts
 const save = async () => {
-  if (!weight && !height && !bodyFat && !notes.trim()) {
-    alert(t.metrics.enterValue);
-    return;
-  }
-  const userId = (await (await import('../supabase')).supabase.auth.getSession()).data.session?.user?.id;
+  if (!weight && !height && !bodyFat && !notes.trim()) { alert(t.metrics.enterValue); return; }
   if (!userId) return;
-  await (await import('../sync/putWithSync')).putWithSync('metrics', {
+  await putWithSync('metrics', {
     id: crypto.randomUUID(),
     date,
     weightKg: weight ? Number(weight) : undefined,
@@ -2987,22 +3157,22 @@ Replace `remove`:
 ```ts
 const remove = async (id: string) => {
   if (confirm(t.metrics.deleteConfirm)) {
-    await (await import('../sync/putWithSync')).deleteWithSync('metrics', id);
+    await deleteWithSync('metrics', id);
   }
 };
 ```
 
-(Update the `metrics.id` type usage in the JSX accordingly — it's now `string`. Search for `m.id!` / `Number(m.id)` and switch to `m.id`.)
+In the JSX (around line 155), update `onClick={() => remove(m.id!)}` to `onClick={() => remove(m.id)}` — `id` is now a non-optional string on `BodyMetric`.
 
-- [ ] **Step 4: `useFavorites.ts` — toggle uses `putWithSync`/`deleteWithSync`**
+- [ ] **Step 5: `useFavorites.ts` — toggle uses `putWithSync`/`deleteWithSync`**
 
-Replace the entire file `/home/ubuntu/AhKeung/src/useFavorites.ts`:
+Replace `/home/ubuntu/AhKeung/src/useFavorites.ts`:
 
 ```ts
 import { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './db';
-import { supabase } from './supabase';
+import { getSupabase } from './supabase';
 import { putWithSync, deleteWithSync } from './sync/putWithSync';
 
 export function useFavoriteIds(): Set<string> {
@@ -3010,8 +3180,9 @@ export function useFavoriteIds(): Set<string> {
   return useMemo(() => new Set((list ?? []).map((f) => f.exerciseId)), [list]);
 }
 
+/** Used outside React components, so it can't go through useCurrentUserId. */
 export async function toggleFavorite(exerciseId: string): Promise<void> {
-  const userId = (await supabase.auth.getSession()).data.session?.user?.id;
+  const userId = (await getSupabase().auth.getSession()).data.session?.user?.id;
   if (!userId) return;
   const existing = await db.favorites.get([userId, exerciseId]);
   if (existing) {
@@ -3022,22 +3193,21 @@ export async function toggleFavorite(exerciseId: string): Promise<void> {
 }
 ```
 
-- [ ] **Step 5: Type-check**
+- [ ] **Step 6: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `cd /home/ubuntu/AhKeung && npx tsc --noEmit`
 Expected: zero errors in production code. Errors will remain in `workflow.test.tsx` until Task 24.
 
-- [ ] **Step 6: Run all non-workflow tests**
+- [ ] **Step 7: Run all non-workflow tests**
 
-Run: `npm test -- --reporter=basic --exclude='**/workflow.test.tsx'`
-(Or just run individual files — `npm test -- src/test/db.test.ts src/sync/`, etc.)
-Expected: green except for the deliberately-skipped workflow test.
+Run: `npm test -- src/test/db.test.ts src/sync src/auth src/test/fakeSupabase.test.ts src/test/authStub.test.ts`
+Expected: green.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/pages/PlanEditor.tsx src/pages/Workout.tsx src/pages/Metrics.tsx src/useFavorites.ts
-git commit -m "Migrate write call sites to putWithSync/deleteWithSync; string IDs throughout"
+git add src/auth/useCurrentUserId.ts src/pages/PlanEditor.tsx src/pages/Workout.tsx src/pages/Metrics.tsx src/useFavorites.ts
+git commit -m "Migrate write call sites to putWithSync; add useCurrentUserId hook"
 ```
 
 ---
@@ -3237,6 +3407,40 @@ describe('sync roundtrip', () => {
     expect(fake.rowOf('plans', planId).deleted_at).not.toBeNull();
     expect(await db.plans.get(planId)).toBeUndefined();
   });
+
+  it('row-level LWW: server field changes are lost when local pushes through a conflict', async () => {
+    // Documents the v1 trade-off explicitly. If we ever upgrade to field-level
+    // merge, this test flips its assertion to assert BOTH fields survive.
+    // Concrete scenario: a trainer (in spec #2) sets `assigned_by` on the
+    // member's plan while the member is offline editing `name`. With row-level
+    // LWW, the member's later push wipes the trainer's assignment.
+    stubAuthenticatedUser({ id: 'u-1' });
+    const fake = getActiveFake();
+
+    const planId = 'plan-clobber-1';
+    await putWithSync('plans', {
+      id: planId, name: 'A', weekStart: '2025-03-10',
+      focus: [], exercises: [], createdAt: 1,
+    }, 'u-1');
+    await flushNow();
+
+    // Other device sets assigned_by (simulating spec-#2 trainer assignment).
+    const remote = fake.rowOf('plans', planId);
+    remote.assigned_by = 'trainer-uuid-xyz';
+    remote.updated_at = new Date(Date.now() + 1000).toISOString();
+
+    // Local edits 'name' without knowing about the assigned_by change.
+    await putWithSync('plans', {
+      id: planId, name: 'LOCAL', weekStart: '2025-03-10',
+      focus: [], exercises: [], createdAt: 1,
+    }, 'u-1');
+    await flushNow();
+
+    // Row-level LWW: local's name wins, but local also clobbered assigned_by.
+    // If we ever upgrade to field-level merge, this assertion flips.
+    expect(fake.rowOf('plans', planId).name).toBe('LOCAL');
+    expect(fake.rowOf('plans', planId).assigned_by).toBeUndefined();
+  });
 });
 ```
 
@@ -3260,10 +3464,15 @@ git commit -m "End-to-end sync roundtrip test (insert/push/pull/conflict/delete)
 
 **Files:** none (manual checklist)
 
-- [ ] **Step 1: Start the dev server**
+- [ ] **Step 1: Build and preview (NOT `npm run dev`)**
 
-Run: `cd /home/ubuntu/AhKeung && npm run dev`
-Open: `http://localhost:5173` in two browsers (or one normal + one private window).
+`vite-plugin-pwa` disables the service worker in `dev` mode by default — so `npm run dev` would *not* exercise the Workbox `NetworkOnly` rule from Task 2. To verify the SW behavior (Step 5 below depends on it), use the preview build:
+
+```bash
+cd /home/ubuntu/AhKeung && npm run build && npm run preview -- --host
+```
+
+Open the preview URL (default `http://localhost:4173`) in two browsers (or one normal + one private window). Note: you'll need HTTPS for true PWA install on a phone — for local desktop testing, http is fine and the SW still registers.
 
 - [ ] **Step 2: Sign in as both users via magic links**
 
@@ -3363,8 +3572,17 @@ This step makes no file changes by default. Optionally write `docs/superpowers/s
 
 ## Gaps and intentional deferrals
 
-The spec mentions two surface elements (a global Toast component and a "Sync is stuck" banner) that are referenced indirectly throughout but never built in this plan. Rationale: these are pure UI affordances with no integration test value, the dead-letter table exists and is queryable, and the most-likely-to-actually-need-this-banner failure modes (network + 401) are handled silently. Adding them is a clean follow-up of ~50 LoC if and when a real user hits them.
+These are deliberate v1 cuts. Each is small enough to add as a follow-up task without restructuring the foundation.
 
-The §7 "Storage exhaustion" toast and the ≥ 10-attempts banner from §5 fall in the same bucket.
+| Item | Spec ref | Why deferred | If you want it in v1 |
+|---|---|---|---|
+| Global Toast component | §7 "UI surface" | No integration test value; failure modes that *matter* (network + auth) are already silent or self-healing. | Add a Task 27: simple `<Toast />` in `App.tsx` listening to an event bus, ~50 LoC. |
+| "Sync is stuck" banner (≥10 attempts) | §5, §7 | Dead-letter table is queryable today; persistent banner is pure UI. | Add a Task 28 alongside dead-letter UI: read `db.syncDeadLetter.count()` + `db.syncQueue.where('attempts').above(9).count()`; render a sticky strip. |
+| Dead-letter review UI | §5 push worker | The data exists in `syncDeadLetter`; a Supabase Studio query is fine for the gym's scale. | Same Task 28. |
+| Storage-quota toast | §7 "Storage exhaustion" | Truly unlikely at this app's data volume (KB-scale text only). | Wrap `putWithSync` in a try/catch and surface via the toast from Task 27. |
+| i18n for new screens | – (spec didn't address) | The rest of the app is bilingual via `useT()`; the new Login/Settings/Guarded loading strings are hardcoded English. | Add a Task 29: add `auth.signIn`, `auth.checkEmail`, `auth.signOut`, `auth.loading`, `auth.displayName`, etc. to `src/i18n/`; replace hardcoded strings. |
+| Field-level merge on conflict | §5 conflict resolution | Requires per-field dirty tracking; v1 uses row-level LWW (see Task 14 note + Task 25 test). | Major: needs a "dirty fields" set on each Dexie row and a server-side `update_fields(jsonb)` RPC. Different design. |
+| Realtime subscriptions for trainer live-view | §9 "Other deferred items" | Spec deferred. | Spec #2 territory. |
+| Service-worker background sync | §9 | Spec deferred. | Future. |
 
-If you want them in v1, add a Task 27 (Toast component) and Task 28 (dead-letter UI / stuck banner) — straightforward, but they don't change the integration story.
+The §7 "≥ 10 attempts" banner from the spec table folds into the "Sync is stuck" row above — same Task 28.
