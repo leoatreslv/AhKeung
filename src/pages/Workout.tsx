@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type SetLog, type WorkoutSession } from '../db';
-import { exerciseById, exercises as allExercises } from '../exercises';
+import { imageUrl } from '../exercises';
+import { useExercises } from '../useExercises';
 import { todayISO, formatDuration } from '../utils';
 import { useT } from '../i18n';
 
@@ -10,6 +11,7 @@ export function Workout() {
   const t = useT();
   const { planId } = useParams<{ planId?: string }>();
   const navigate = useNavigate();
+  const catalog = useExercises();
   const plan = useLiveQuery(
     async () => (planId ? await db.plans.get(Number(planId)) : undefined),
     [planId],
@@ -45,9 +47,11 @@ export function Workout() {
     return () => clearInterval(timer);
   }, [session]);
 
-  if (!session) {
+  if (!session || !catalog) {
     return <div className="p-4 text-slate-400">{t.common.loading}</div>;
   }
+
+  const findEx = (id: string) => catalog.find((e) => e.id === id);
 
   const updateSet = (exIdx: number, setIdx: number, patch: Partial<SetLog>) => {
     setSession((s) => {
@@ -125,15 +129,19 @@ export function Workout() {
 
       <ul className="space-y-3">
         {session.exercises.map((ex, exIdx) => {
-          const meta = exerciseById(ex.exerciseId);
-          if (!meta) return null;
+          const meta = findEx(ex.exerciseId);
+          const name = meta ? (t.exerciseName[meta.id] ?? meta.name) : ex.exerciseId;
           return (
             <li key={ex.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
               <div className="p-3 flex items-center gap-2 border-b border-slate-700">
-                <span className="text-2xl">{meta.emoji}</span>
-                <div className="flex-1">
-                  <div className="font-semibold text-sm">{t.exercise[meta.id]?.name ?? meta.id}</div>
-                  <div className="text-xs text-slate-400">{meta.equipment}</div>
+                {meta?.images[0] ? (
+                  <img src={imageUrl(meta.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+                ) : (
+                  <div className="w-10 h-10 rounded bg-slate-700" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm truncate">{name}</div>
+                  {meta && <div className="text-xs text-slate-400 truncate capitalize">{meta.equipment}</div>}
                 </div>
                 <button onClick={() => removeExercise(exIdx)} className="text-slate-500 hover:text-rose-400">✕</button>
               </div>
@@ -211,22 +219,29 @@ export function Workout() {
               <button onClick={() => setPickerOpen(false)} className="ml-auto text-slate-400 text-xl leading-none">×</button>
             </div>
             <ul className="overflow-y-auto flex-1">
-              {allExercises
+              {catalog
                 .filter((e) => !session.exercises.find((se) => se.exerciseId === e.id))
-                .map((ex) => (
-                  <li key={ex.id}>
-                    <button
-                      onClick={() => addExercise(ex.id)}
-                      className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
-                    >
-                      <span className="text-2xl">{ex.emoji}</span>
-                      <div>
-                        <div className="font-medium text-sm">{t.exercise[ex.id]?.name ?? ex.id}</div>
-                        <div className="text-xs text-slate-400">{ex.equipment}</div>
-                      </div>
-                    </button>
-                  </li>
-                ))}
+                .map((ex) => {
+                  const name = t.exerciseName[ex.id] ?? ex.name;
+                  return (
+                    <li key={ex.id}>
+                      <button
+                        onClick={() => addExercise(ex.id)}
+                        className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
+                      >
+                        {ex.images[0] ? (
+                          <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+                        ) : (
+                          <div className="w-10 h-10 rounded bg-slate-700" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm truncate">{name}</div>
+                          <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
             </ul>
           </div>
         </div>

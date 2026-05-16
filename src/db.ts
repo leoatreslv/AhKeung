@@ -74,6 +74,16 @@ class AhKeungDB extends Dexie {
       sessions: '++id, planId, date, startedAt',
       metrics: '++id, date',
     });
+    // v2: switched exercise catalog to free-exercise-db (new IDs).
+    // Plans/sessions created with v1 reference stale IDs, so clear them.
+    this.version(2).stores({
+      plans: '++id, weekStart, createdAt',
+      sessions: '++id, planId, date, startedAt',
+      metrics: '++id, date',
+    }).upgrade(async (tx) => {
+      await tx.table('plans').clear();
+      await tx.table('sessions').clear();
+    });
   }
 }
 

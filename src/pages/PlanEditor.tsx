@@ -7,7 +7,8 @@ import {
   type MuscleGroup,
   type PlanExercise,
 } from '../db';
-import { exerciseById, exercises, type ExerciseMeta } from '../exercises';
+import { imageUrl, type ExerciseMeta } from '../exercises';
+import { useExercises } from '../useExercises';
 import { weekStartISO } from '../utils';
 import { useT } from '../i18n';
 
@@ -20,6 +21,7 @@ export function PlanEditor() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const planId = id ? Number(id) : undefined;
+  const catalog = useExercises();
 
   const existing = useLiveQuery(
     async () => (planId ? await db.plans.get(planId) : undefined),
@@ -42,9 +44,12 @@ export function PlanEditor() {
   }, [existing]);
 
   const filteredExercises = useMemo(() => {
-    if (focus.length === 0) return exercises;
-    return exercises.filter((e) => focus.includes(e.muscleGroup));
-  }, [focus]);
+    if (!catalog) return [];
+    if (focus.length === 0) return catalog;
+    return catalog.filter((e) => focus.includes(e.muscleGroup));
+  }, [focus, catalog]);
+
+  const findEx = (exId: string) => catalog?.find((e) => e.id === exId);
 
   const toggleFocus = (g: MuscleGroup) =>
     setFocus((f) => (f.includes(g) ? f.filter((x) => x !== g) : [...f, g]));
@@ -149,15 +154,24 @@ export function PlanEditor() {
         ) : (
           <ul className="space-y-2">
             {planExercises.map((pe) => {
-              const ex = exerciseById(pe.exerciseId);
-              if (!ex) return null;
+              const ex = findEx(pe.exerciseId);
+              const exName = ex ? (t.exerciseName[ex.id] ?? ex.name) : pe.exerciseId;
               return (
                 <li key={pe.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 p-3">
                   <div className="flex items-start gap-2 mb-2">
-                    <div className="text-2xl">{ex.emoji}</div>
-                    <div className="flex-1">
-                      <div className="font-semibold text-sm">{t.exercise[ex.id]?.name ?? ex.id}</div>
-                      <div className="text-xs text-slate-400">{ex.equipment}</div>
+                    {ex?.images[0] ? (
+                      <img
+                        src={imageUrl(ex.images[0])}
+                        alt=""
+                        loading="lazy"
+                        className="w-10 h-10 rounded object-cover bg-slate-700"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded bg-slate-700" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-sm truncate">{exName}</div>
+                      {ex && <div className="text-xs text-slate-400 capitalize">{ex.equipment}</div>}
                     </div>
                     <button
                       onClick={() => removeExercise(pe.exerciseId)}
@@ -245,8 +259,9 @@ function ExercisePicker({
   const list = exercises.filter((e) => {
     if (excludeIds.includes(e.id)) return false;
     if (search === '') return true;
-    const name = t.exercise[e.id]?.name ?? '';
-    return name.toLowerCase().includes(search.toLowerCase());
+    const local = t.exerciseName[e.id] ?? e.name;
+    const q = search.toLowerCase();
+    return local.toLowerCase().includes(q) || e.name.toLowerCase().includes(q);
   });
 
   return (
@@ -269,20 +284,27 @@ function ExercisePicker({
           />
         </div>
         <ul className="overflow-y-auto flex-1">
-          {list.map((ex) => (
-            <li key={ex.id}>
-              <button
-                onClick={() => onPick(ex.id)}
-                className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
-              >
-                <span className="text-2xl">{ex.emoji}</span>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">{t.exercise[ex.id]?.name ?? ex.id}</div>
-                  <div className="text-xs text-slate-400">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
-                </div>
-              </button>
-            </li>
-          ))}
+          {list.map((ex) => {
+            const name = t.exerciseName[ex.id] ?? ex.name;
+            return (
+              <li key={ex.id}>
+                <button
+                  onClick={() => onPick(ex.id)}
+                  className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
+                >
+                  {ex.images[0] ? (
+                    <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+                  ) : (
+                    <div className="w-10 h-10 rounded bg-slate-700" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm truncate">{name}</div>
+                    <div className="text-xs text-slate-400 truncate capitalize">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
+                  </div>
+                </button>
+              </li>
+            );
+          })}
           {list.length === 0 && (
             <li className="p-4 text-center text-slate-500 text-sm">{t.planEditor.noMatch}</li>
           )}

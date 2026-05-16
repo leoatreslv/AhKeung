@@ -7,8 +7,6 @@ export const LOCALES: { code: Locale; label: string }[] = [
   { code: 'zh-Hant', label: '繁體中文' },
 ];
 
-export type ExerciseI18n = { name: string; description: string };
-
 export interface Translation {
   appName: string;
   tagline: string;
@@ -96,6 +94,11 @@ export interface Translation {
   library: {
     searchPlaceholder: string;
     noMatch: string;
+    instructions: string;
+    level: string;
+    primaryMuscles: string;
+    secondaryMuscles: string;
+    viewDetails: string;
   };
 
   metrics: {
@@ -111,5 +114,9 @@ export interface Translation {
     deleteConfirm: string;
   };
 
-  exercise: Record<string, ExerciseI18n>;
+  /**
+   * Sparse overlay: free-exercise-db IDs → localized name.
+   * If absent, fall back to the English name from the data file.
+   */
+  exerciseName: Record<string, string>;
 }
