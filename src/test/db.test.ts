@@ -1,24 +1,39 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { db } from '../db';
 
+const UID = '00000000-0000-0000-0000-000000000001';
+
 beforeEach(async () => {
   await db.delete();
   await db.open();
 });
 
 describe('Dexie database', () => {
-  it('opens at schema version 3', async () => {
-    expect(db.verno).toBe(3);
+  it('opens at schema version 4', async () => {
+    expect(db.verno).toBe(4);
   });
 
-  it('has four tables: plans, sessions, metrics, favorites', () => {
+  it('has the owned tables plus sync support tables', () => {
     const names = db.tables.map((t) => t.name).sort();
-    expect(names).toEqual(['favorites', 'metrics', 'plans', 'sessions']);
+    expect(names).toEqual([
+      'favorites',
+      'metrics',
+      'plans',
+      'sessions',
+      'syncDeadLetter',
+      'syncMeta',
+      'syncQueue',
+    ]);
   });
 
   describe('plans CRUD', () => {
-    it('stores and retrieves a plan', async () => {
-      const id = await db.plans.add({
+    it('stores and retrieves a plan by UUID', async () => {
+      const id = 'plan-uuid-1';
+      await db.plans.put({
+        id,
+        userId: UID,
+        updatedAt: Date.now(),
+        serverVersion: null,
         name: 'Push Day',
         weekStart: '2025-03-10',
         focus: ['chest', 'triceps'],
@@ -34,7 +49,11 @@ describe('Dexie database', () => {
     });
 
     it('looks up by weekStart index', async () => {
-      await db.plans.add({
+      await db.plans.put({
+        id: 'plan-uuid-2',
+        userId: UID,
+        updatedAt: Date.now(),
+        serverVersion: null,
         name: 'Week 1',
         weekStart: '2025-03-10',
         focus: ['back'],
@@ -48,7 +67,12 @@ describe('Dexie database', () => {
 
   describe('sessions CRUD', () => {
     it('stores a workout session with completed sets', async () => {
-      const id = await db.sessions.add({
+      const id = 'session-uuid-1';
+      await db.sessions.put({
+        id,
+        userId: UID,
+        updatedAt: Date.now(),
+        serverVersion: null,
         date: '2025-03-10',
         startedAt: Date.now(),
         endedAt: Date.now() + 30 * 60_000,
@@ -70,33 +94,54 @@ describe('Dexie database', () => {
   });
 
   describe('favorites CRUD', () => {
-    it('toggles a favorite via the helper', async () => {
-      const { toggleFavorite } = await import('../useFavorites');
-
-      await toggleFavorite('Pullups');
-      expect(await db.favorites.get('Pullups')).toBeDefined();
-
-      await toggleFavorite('Pullups');
-      expect(await db.favorites.get('Pullups')).toBeUndefined();
+    it('stores favorites keyed by [userId, exerciseId]', async () => {
+      await db.favorites.put({
+        userId: UID,
+        exerciseId: 'Pullups',
+        addedAt: Date.now(),
+        updatedAt: Date.now(),
+        serverVersion: null,
+      });
+      const got = await db.favorites.get([UID, 'Pullups']);
+      expect(got?.exerciseId).toBe('Pullups');
     });
 
-    it('stores multiple favorites keyed by exerciseId', async () => {
-      const { toggleFavorite } = await import('../useFavorites');
-      await toggleFavorite('Pullups');
-      await toggleFavorite('Barbell_Squat');
-      const all = await db.favorites.toArray();
+    it('lists favorites filtered by userId', async () => {
+      await db.favorites.put({ userId: UID, exerciseId: 'Pullups',      addedAt: 1, updatedAt: 1, serverVersion: null });
+      await db.favorites.put({ userId: UID, exerciseId: 'Barbell_Squat', addedAt: 2, updatedAt: 2, serverVersion: null });
+      const all = await db.favorites.where('userId').equals(UID).toArray();
       expect(all.map((f) => f.exerciseId).sort()).toEqual(['Barbell_Squat', 'Pullups']);
     });
   });
 
   describe('metrics CRUD', () => {
     it('stores body metrics and queries ordered by date', async () => {
-      await db.metrics.add({ date: '2025-03-01', weightKg: 80 });
-      await db.metrics.add({ date: '2025-03-15', weightKg: 79 });
-      await db.metrics.add({ date: '2025-03-10', weightKg: 79.5 });
+      await db.metrics.put({ id: 'm-1', userId: UID, updatedAt: 1, serverVersion: null, date: '2025-03-01', weightKg: 80 });
+      await db.metrics.put({ id: 'm-2', userId: UID, updatedAt: 2, serverVersion: null, date: '2025-03-15', weightKg: 79 });
+      await db.metrics.put({ id: 'm-3', userId: UID, updatedAt: 3, serverVersion: null, date: '2025-03-10', weightKg: 79.5 });
 
       const ordered = await db.metrics.orderBy('date').toArray();
       expect(ordered.map((m) => m.date)).toEqual(['2025-03-01', '2025-03-10', '2025-03-15']);
+    });
+  });
+
+  describe('sync tables', () => {
+    it('syncQueue auto-increments seq', async () => {
+      const s1 = await db.syncQueue.add({
+        table: 'plans', rowId: 'p1', op: 'insert',
+        expectedServerVersion: null, attempts: 0, queuedAt: Date.now(),
+      });
+      const s2 = await db.syncQueue.add({
+        table: 'plans', rowId: 'p2', op: 'insert',
+        expectedServerVersion: null, attempts: 0, queuedAt: Date.now(),
+      });
+      expect(s2).toBe(s1 + 1);
+    });
+
+    it('syncMeta stores arbitrary key/value', async () => {
+      await db.syncMeta.put({ key: 'plans.lastPulledAt', value: 'iso-string' });
+      const got = await db.syncMeta.get('plans.lastPulledAt');
+      expect(got?.value).toBe('iso-string');
     });
   });
 });
