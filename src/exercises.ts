@@ -87,5 +87,11 @@ export async function loadExercises(): Promise<ExerciseMeta[]> {
 
 export const exerciseById = (id: string) => cache?.find((e) => e.id === id);
 
+// Test-only: reset the memoized catalog so the next loadExercises() refetches.
+export const __resetExercisesForTest = () => {
+  cache = null;
+  inflight = null;
+};
+
 export const imageUrl = (path: string) =>
   `https://cdn.jsdelivr.net/gh/yuhonas/free-exercise-db@main/exercises/${path}`;

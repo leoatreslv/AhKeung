@@ -45,6 +45,30 @@ Outputs a fully static site to `dist/` — drop it anywhere (Vercel, Netlify, Cl
 3. Tap **Share → Add to Home Screen** (iOS) or **⋮ → Install app** (Android).
 4. Launch from the home-screen icon — runs fullscreen, no browser chrome.
 
+## Tests
+
+```bash
+npm test           # run once
+npm run test:watch # re-run on file changes
+npm run test:ui    # open Vitest's browser UI
+```
+
+Stack: Vitest + React Testing Library + jsdom + fake-indexeddb. The
+tests live in `src/test/` and cover:
+
+| File | Surface |
+|---|---|
+| `utils.test.ts` | `todayISO`, `weekStartISO`, `formatDate`, `formatDuration` |
+| `exercises.test.ts` | catalog loading + muscle-group classification + `imageUrl` |
+| `db.test.ts` | Dexie schema version, indexes, CRUD on plans/sessions/metrics |
+| `i18n.test.tsx` | locale detection, switching, persistence, every muscle-group key present |
+| `Library.test.tsx` | filter by muscle group, search, expand to view instructions |
+| `workflow.test.tsx` | end-to-end: build a plan → start a workout → log a set → finish → assert persistence |
+
+The test setup stubs `fetch` to serve a tiny in-memory fixture
+(`src/test/fixtures.ts`) instead of the full ~1 MB
+`exercises.json`, so tests run in under a few seconds.
+
 ## Project structure
 
 ```

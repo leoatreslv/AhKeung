@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vitest/globals", "@testing-library/jest-dom"],
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src"],
+  "exclude": []
+}
