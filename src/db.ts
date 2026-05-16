@@ -79,18 +79,6 @@ class AhKeungDB extends Dexie {
 
 export const db = new AhKeungDB();
 
-export const muscleGroupLabel: Record<MuscleGroup, string> = {
-  chest: 'Chest',
-  back: 'Back',
-  shoulders: 'Shoulders',
-  biceps: 'Biceps',
-  triceps: 'Triceps',
-  legs: 'Legs',
-  glutes: 'Glutes',
-  core: 'Core',
-  cardio: 'Cardio',
-};
-
 export const muscleGroupColor: Record<MuscleGroup, string> = {
   chest: 'bg-rose-500',
   back: 'bg-blue-500',

@@ -4,18 +4,19 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   db,
   muscleGroupColor,
-  muscleGroupLabel,
   type MuscleGroup,
   type PlanExercise,
 } from '../db';
-import { exerciseById, exercises } from '../exercises';
+import { exerciseById, exercises, type ExerciseMeta } from '../exercises';
 import { weekStartISO } from '../utils';
+import { useT } from '../i18n';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
 ];
 
 export function PlanEditor() {
+  const t = useT();
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const planId = id ? Number(id) : undefined;
@@ -65,7 +66,7 @@ export function PlanEditor() {
 
   const save = async () => {
     if (!name.trim()) {
-      alert('Give your plan a name');
+      alert(t.planEditor.nameRequired);
       return;
     }
     const data = {
@@ -85,7 +86,7 @@ export function PlanEditor() {
 
   const remove = async () => {
     if (!planId) return;
-    if (!confirm('Delete this plan?')) return;
+    if (!confirm(t.planEditor.deleteConfirm)) return;
     await db.plans.delete(planId);
     navigate('/plans');
   };
@@ -93,17 +94,17 @@ export function PlanEditor() {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <label className="text-xs text-slate-400 block mb-1">Plan name</label>
+        <label className="text-xs text-slate-400 block mb-1">{t.planEditor.nameLabel}</label>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Push/Pull Week"
+          placeholder={t.planEditor.namePlaceholderExample}
           className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base"
         />
       </div>
 
       <div>
-        <label className="text-xs text-slate-400 block mb-1">Week starting</label>
+        <label className="text-xs text-slate-400 block mb-1">{t.planEditor.weekStarting}</label>
         <input
           type="date"
           value={weekStart}
@@ -113,7 +114,7 @@ export function PlanEditor() {
       </div>
 
       <div>
-        <label className="text-xs text-slate-400 block mb-2">Focus muscle groups</label>
+        <label className="text-xs text-slate-400 block mb-2">{t.planEditor.focusGroups}</label>
         <div className="flex flex-wrap gap-2">
           {ALL_GROUPS.map((g) => (
             <button
@@ -125,7 +126,7 @@ export function PlanEditor() {
                   : 'bg-slate-800 text-slate-300 border-slate-700'
               }`}
             >
-              {muscleGroupLabel[g]}
+              {t.muscleGroup[g]}
             </button>
           ))}
         </div>
@@ -133,17 +134,17 @@ export function PlanEditor() {
 
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="text-xs text-slate-400">Exercises</label>
+          <label className="text-xs text-slate-400">{t.planEditor.exercises}</label>
           <button
             onClick={() => setPickerOpen(true)}
             className="text-keung-500 text-sm font-semibold"
           >
-            + Add
+            {t.planEditor.addExercise}
           </button>
         </div>
         {planExercises.length === 0 ? (
           <p className="text-slate-500 text-sm bg-slate-800/50 rounded-lg p-3 text-center">
-            No exercises yet. Tap "+ Add" to start.
+            {t.planEditor.noExercises}
           </p>
         ) : (
           <ul className="space-y-2">
@@ -155,7 +156,7 @@ export function PlanEditor() {
                   <div className="flex items-start gap-2 mb-2">
                     <div className="text-2xl">{ex.emoji}</div>
                     <div className="flex-1">
-                      <div className="font-semibold text-sm">{ex.name}</div>
+                      <div className="font-semibold text-sm">{t.exercise[ex.id]?.name ?? ex.id}</div>
                       <div className="text-xs text-slate-400">{ex.equipment}</div>
                     </div>
                     <button
@@ -167,7 +168,7 @@ export function PlanEditor() {
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <div>
-                      <label className="text-slate-400 block">Sets</label>
+                      <label className="text-slate-400 block">{t.planEditor.sets}</label>
                       <input
                         type="number"
                         min={1}
@@ -177,7 +178,7 @@ export function PlanEditor() {
                       />
                     </div>
                     <div>
-                      <label className="text-slate-400 block">Reps</label>
+                      <label className="text-slate-400 block">{t.planEditor.reps}</label>
                       <input
                         type="number"
                         min={1}
@@ -187,7 +188,7 @@ export function PlanEditor() {
                       />
                     </div>
                     <div>
-                      <label className="text-slate-400 block">Weight (kg)</label>
+                      <label className="text-slate-400 block">{t.planEditor.weightKg}</label>
                       <input
                         type="number"
                         min={0}
@@ -207,11 +208,11 @@ export function PlanEditor() {
 
       <div className="flex gap-2 pt-2">
         <button onClick={save} className="flex-1 bg-keung-600 hover:bg-keung-700 text-white py-2.5 rounded-lg font-semibold">
-          Save Plan
+          {t.planEditor.savePlan}
         </button>
         {planId && (
           <button onClick={remove} className="px-4 bg-rose-900/40 border border-rose-800 text-rose-300 py-2.5 rounded-lg">
-            Delete
+            {t.common.delete}
           </button>
         )}
       </div>
@@ -234,17 +235,19 @@ function ExercisePicker({
   onPick,
   onClose,
 }: {
-  exercises: typeof import('../exercises').exercises;
+  exercises: ExerciseMeta[];
   excludeIds: string[];
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [search, setSearch] = useState('');
-  const list = exercises.filter(
-    (e) =>
-      !excludeIds.includes(e.id) &&
-      (search === '' || e.name.toLowerCase().includes(search.toLowerCase())),
-  );
+  const list = exercises.filter((e) => {
+    if (excludeIds.includes(e.id)) return false;
+    if (search === '') return true;
+    const name = t.exercise[e.id]?.name ?? '';
+    return name.toLowerCase().includes(search.toLowerCase());
+  });
 
   return (
     <div className="fixed inset-0 bg-black/60 z-20 flex items-end" onClick={onClose}>
@@ -254,13 +257,13 @@ function ExercisePicker({
       >
         <div className="p-3 border-b border-slate-800">
           <div className="flex items-center mb-2">
-            <h3 className="font-bold">Pick an exercise</h3>
+            <h3 className="font-bold">{t.planEditor.pickExercise}</h3>
             <button onClick={onClose} className="ml-auto text-slate-400 text-xl leading-none">×</button>
           </div>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search…"
+            placeholder={t.common.search}
             className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm"
             autoFocus
           />
@@ -274,14 +277,14 @@ function ExercisePicker({
               >
                 <span className="text-2xl">{ex.emoji}</span>
                 <div className="flex-1">
-                  <div className="font-medium text-sm">{ex.name}</div>
-                  <div className="text-xs text-slate-400">{muscleGroupLabel[ex.muscleGroup]} · {ex.equipment}</div>
+                  <div className="font-medium text-sm">{t.exercise[ex.id]?.name ?? ex.id}</div>
+                  <div className="text-xs text-slate-400">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
                 </div>
               </button>
             </li>
           ))}
           {list.length === 0 && (
-            <li className="p-4 text-center text-slate-500 text-sm">No exercises match.</li>
+            <li className="p-4 text-center text-slate-500 text-sm">{t.planEditor.noMatch}</li>
           )}
         </ul>
       </div>

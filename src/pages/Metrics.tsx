@@ -3,8 +3,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { db } from '../db';
 import { todayISO, formatDate } from '../utils';
+import { useI18n } from '../i18n';
 
 export function Metrics() {
+  const { t, locale } = useI18n();
   const metrics = useLiveQuery(() => db.metrics.orderBy('date').toArray(), []);
 
   const [date, setDate] = useState(todayISO());
@@ -17,7 +19,7 @@ export function Metrics() {
 
   const save = async () => {
     if (!weight && !height && !bodyFat && !notes.trim()) {
-      alert('Enter at least one value');
+      alert(t.metrics.enterValue);
       return;
     }
     await db.metrics.add({
@@ -33,7 +35,7 @@ export function Metrics() {
   };
 
   const remove = async (id: number) => {
-    if (confirm('Delete this entry?')) await db.metrics.delete(id);
+    if (confirm(t.metrics.deleteConfirm)) await db.metrics.delete(id);
   };
 
   const chartData = (metrics ?? [])
@@ -48,10 +50,10 @@ export function Metrics() {
   return (
     <div className="p-4 space-y-4">
       <section className="bg-slate-800 rounded-xl border border-slate-700 p-3">
-        <h3 className="font-semibold mb-2">Log entry</h3>
+        <h3 className="font-semibold mb-2">{t.metrics.logEntry}</h3>
         <div className="grid grid-cols-2 gap-2">
           <label className="col-span-2">
-            <span className="text-xs text-slate-400">Date</span>
+            <span className="text-xs text-slate-400">{t.common.date}</span>
             <input
               type="date"
               value={date}
@@ -60,7 +62,7 @@ export function Metrics() {
             />
           </label>
           <label>
-            <span className="text-xs text-slate-400">Weight (kg)</span>
+            <span className="text-xs text-slate-400">{t.metrics.weightKg}</span>
             <input
               type="number"
               step={0.1}
@@ -70,7 +72,7 @@ export function Metrics() {
             />
           </label>
           <label>
-            <span className="text-xs text-slate-400">Height (cm)</span>
+            <span className="text-xs text-slate-400">{t.metrics.heightCm}</span>
             <input
               type="number"
               value={height}
@@ -80,7 +82,7 @@ export function Metrics() {
             />
           </label>
           <label>
-            <span className="text-xs text-slate-400">Body fat %</span>
+            <span className="text-xs text-slate-400">{t.metrics.bodyFatPct}</span>
             <input
               type="number"
               step={0.1}
@@ -90,7 +92,7 @@ export function Metrics() {
             />
           </label>
           <label className="col-span-2">
-            <span className="text-xs text-slate-400">Notes</span>
+            <span className="text-xs text-slate-400">{t.common.notes}</span>
             <input
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -99,22 +101,22 @@ export function Metrics() {
           </label>
         </div>
         <button onClick={save} className="w-full mt-3 bg-keung-600 hover:bg-keung-700 text-white py-2 rounded-lg font-semibold">
-          Save
+          {t.common.save}
         </button>
       </section>
 
       {bmi && (
         <section className="bg-slate-800 rounded-xl border border-slate-700 p-3 flex justify-around text-center">
           <div>
-            <div className="text-xs text-slate-400">Weight</div>
+            <div className="text-xs text-slate-400">{t.home.weight}</div>
             <div className="font-bold text-lg">{latestWeight} kg</div>
           </div>
           <div>
-            <div className="text-xs text-slate-400">Height</div>
+            <div className="text-xs text-slate-400">{t.home.height}</div>
             <div className="font-bold text-lg">{latestHeight} cm</div>
           </div>
           <div>
-            <div className="text-xs text-slate-400">BMI</div>
+            <div className="text-xs text-slate-400">{t.metrics.bmi}</div>
             <div className="font-bold text-lg">{bmi}</div>
           </div>
         </section>
@@ -122,7 +124,7 @@ export function Metrics() {
 
       {chartData.length >= 2 && (
         <section className="bg-slate-800 rounded-xl border border-slate-700 p-3">
-          <h3 className="font-semibold mb-2 text-sm">Weight trend</h3>
+          <h3 className="font-semibold mb-2 text-sm">{t.metrics.weightTrend}</h3>
           <div className="h-48">
             <ResponsiveContainer>
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -138,12 +140,12 @@ export function Metrics() {
       )}
 
       <section>
-        <h3 className="font-semibold mb-2 text-sm text-slate-400 uppercase tracking-wide">History</h3>
+        <h3 className="font-semibold mb-2 text-sm text-slate-400 uppercase tracking-wide">{t.metrics.history}</h3>
         {metrics && metrics.length > 0 ? (
           <ul className="space-y-1">
             {metrics.slice().reverse().map((m) => (
               <li key={m.id} className="bg-slate-800 rounded-lg border border-slate-700 p-2 flex items-center gap-3 text-sm">
-                <div className="text-xs text-slate-400 w-24">{formatDate(m.date)}</div>
+                <div className="text-xs text-slate-400 w-24">{formatDate(m.date, locale)}</div>
                 <div className="flex-1 flex gap-3">
                   {m.weightKg && <span>{m.weightKg}kg</span>}
                   {m.heightCm && <span>{m.heightCm}cm</span>}
@@ -155,7 +157,7 @@ export function Metrics() {
             ))}
           </ul>
         ) : (
-          <p className="text-slate-500 text-sm">No entries yet.</p>
+          <p className="text-slate-500 text-sm">{t.metrics.noEntries}</p>
         )}
       </section>
     </div>

@@ -4,8 +4,10 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type SetLog, type WorkoutSession } from '../db';
 import { exerciseById, exercises as allExercises } from '../exercises';
 import { todayISO, formatDuration } from '../utils';
+import { useT } from '../i18n';
 
 export function Workout() {
+  const t = useT();
   const { planId } = useParams<{ planId?: string }>();
   const navigate = useNavigate();
   const plan = useLiveQuery(
@@ -39,21 +41,20 @@ export function Workout() {
 
   useEffect(() => {
     if (!session) return;
-    const t = setInterval(() => setElapsed(Date.now() - session.startedAt), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setElapsed(Date.now() - session.startedAt), 1000);
+    return () => clearInterval(timer);
   }, [session]);
 
   if (!session) {
-    return <div className="p-4 text-slate-400">Loading…</div>;
+    return <div className="p-4 text-slate-400">{t.common.loading}</div>;
   }
 
   const updateSet = (exIdx: number, setIdx: number, patch: Partial<SetLog>) => {
     setSession((s) => {
       if (!s) return s;
-      const next = { ...s, exercises: s.exercises.map((e, i) =>
+      return { ...s, exercises: s.exercises.map((e, i) =>
         i === exIdx ? { ...e, sets: e.sets.map((set, j) => (j === setIdx ? { ...set, ...patch } : set)) } : e,
       )};
-      return next;
     });
   };
 
@@ -92,14 +93,14 @@ export function Workout() {
   const finish = async () => {
     const done = session.exercises.some((e) => e.sets.some((s) => s.done));
     if (!done) {
-      if (!confirm('No sets completed. Save anyway?')) return;
+      if (!confirm(t.workout.noSetsDoneConfirm)) return;
     }
     await db.sessions.add({ ...session, endedAt: Date.now() });
     navigate('/');
   };
 
   const cancel = () => {
-    if (confirm('Discard this workout?')) navigate(-1);
+    if (confirm(t.workout.discardConfirm)) navigate(-1);
   };
 
   const totalSets = session.exercises.reduce((sum, e) => sum + e.sets.length, 0);
@@ -109,17 +110,17 @@ export function Workout() {
     <div className="p-4 space-y-3">
       <div className="bg-slate-800 rounded-xl p-3 border border-slate-700 flex items-center">
         <div>
-          <div className="text-xs text-slate-400">Elapsed</div>
+          <div className="text-xs text-slate-400">{t.workout.elapsed}</div>
           <div className="text-xl font-bold tabular-nums">{formatDuration(elapsed)}</div>
         </div>
         <div className="ml-auto text-right">
-          <div className="text-xs text-slate-400">Progress</div>
+          <div className="text-xs text-slate-400">{t.workout.progress}</div>
           <div className="text-xl font-bold">{doneSets}/{totalSets}</div>
         </div>
       </div>
 
       {session.exercises.length === 0 && (
-        <p className="text-slate-500 text-sm text-center py-6">No exercises. Add one to start.</p>
+        <p className="text-slate-500 text-sm text-center py-6">{t.workout.noExercises}</p>
       )}
 
       <ul className="space-y-3">
@@ -131,17 +132,17 @@ export function Workout() {
               <div className="p-3 flex items-center gap-2 border-b border-slate-700">
                 <span className="text-2xl">{meta.emoji}</span>
                 <div className="flex-1">
-                  <div className="font-semibold text-sm">{meta.name}</div>
+                  <div className="font-semibold text-sm">{t.exercise[meta.id]?.name ?? meta.id}</div>
                   <div className="text-xs text-slate-400">{meta.equipment}</div>
                 </div>
                 <button onClick={() => removeExercise(exIdx)} className="text-slate-500 hover:text-rose-400">✕</button>
               </div>
               <div className="px-3 py-2">
                 <div className="grid grid-cols-[2rem_1fr_1fr_2.5rem_1.5rem] gap-2 items-center text-[10px] text-slate-400 uppercase tracking-wide mb-1">
-                  <span>Set</span>
-                  <span>kg</span>
-                  <span>Reps</span>
-                  <span>Done</span>
+                  <span>{t.workout.set}</span>
+                  <span>{t.workout.weightUnit}</span>
+                  <span>{t.planEditor.reps}</span>
+                  <span>{t.common.done}</span>
                   <span></span>
                 </div>
                 {ex.sets.map((s, setIdx) => (
@@ -178,7 +179,7 @@ export function Workout() {
                   onClick={() => addSet(exIdx)}
                   className="w-full mt-1 py-1.5 border border-dashed border-slate-700 text-xs text-slate-400 rounded"
                 >
-                  + Add set
+                  {t.workout.addSet}
                 </button>
               </div>
             </li>
@@ -190,15 +191,15 @@ export function Workout() {
         onClick={() => setPickerOpen(true)}
         className="w-full py-2.5 border-2 border-dashed border-slate-700 text-slate-300 rounded-xl text-sm"
       >
-        + Add Exercise
+        {t.workout.addExercise}
       </button>
 
       <div className="flex gap-2 pt-2">
         <button onClick={cancel} className="px-4 bg-slate-700 hover:bg-slate-600 text-white py-2.5 rounded-lg">
-          Cancel
+          {t.common.cancel}
         </button>
         <button onClick={finish} className="flex-1 bg-keung-600 hover:bg-keung-700 text-white py-2.5 rounded-lg font-semibold">
-          Finish Workout
+          {t.workout.finish}
         </button>
       </div>
 
@@ -206,7 +207,7 @@ export function Workout() {
         <div className="fixed inset-0 bg-black/60 z-20 flex items-end" onClick={() => setPickerOpen(false)}>
           <div className="w-full max-w-md mx-auto bg-slate-900 border-t border-slate-700 rounded-t-2xl max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b border-slate-800 flex">
-              <h3 className="font-bold">Add exercise</h3>
+              <h3 className="font-bold">{t.workout.addExerciseTitle}</h3>
               <button onClick={() => setPickerOpen(false)} className="ml-auto text-slate-400 text-xl leading-none">×</button>
             </div>
             <ul className="overflow-y-auto flex-1">
@@ -220,7 +221,7 @@ export function Workout() {
                     >
                       <span className="text-2xl">{ex.emoji}</span>
                       <div>
-                        <div className="font-medium text-sm">{ex.name}</div>
+                        <div className="font-medium text-sm">{t.exercise[ex.id]?.name ?? ex.id}</div>
                         <div className="text-xs text-slate-400">{ex.equipment}</div>
                       </div>
                     </button>

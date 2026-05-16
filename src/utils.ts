@@ -8,8 +8,8 @@ export const weekStartISO = (d: Date = new Date()) => {
   return date.toISOString().slice(0, 10);
 };
 
-export const formatDate = (iso: string) =>
-  new Date(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+export const formatDate = (iso: string, locale?: string) =>
+  new Date(iso).toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' });
 
 export const formatDuration = (ms: number) => {
   const totalSec = Math.floor(ms / 1000);
