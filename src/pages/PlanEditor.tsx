@@ -12,6 +12,7 @@ import { useExercises } from '../useExercises';
 import { weekStartISO } from '../utils';
 import { useT } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
+import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -34,6 +35,7 @@ export function PlanEditor() {
   const [focus, setFocus] = useState<MuscleGroup[]>([]);
   const [planExercises, setPlanExercises] = useState<PlanExercise[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [detailsFor, setDetailsFor] = useState<ExerciseMeta | null>(null);
   const [loadedFromId, setLoadedFromId] = useState<number | undefined>(undefined);
 
   if (existing && existing.id !== loadedFromId) {
@@ -174,6 +176,15 @@ export function PlanEditor() {
                       <div className="font-semibold text-sm truncate">{exName}</div>
                       {ex && <div className="text-xs text-slate-400 capitalize">{ex.equipment}</div>}
                     </div>
+                    {ex && (
+                      <button
+                        onClick={() => setDetailsFor(ex)}
+                        aria-label={t.library.viewDetails}
+                        className="text-slate-400 hover:text-keung-500 text-sm px-1"
+                      >
+                        ⓘ
+                      </button>
+                    )}
                     <button
                       onClick={() => removeExercise(pe.exerciseId)}
                       className="text-slate-500 hover:text-rose-400 text-sm"
@@ -238,7 +249,12 @@ export function PlanEditor() {
           excludeIds={planExercises.map((p) => p.exerciseId)}
           onPick={addExercise}
           onClose={() => setPickerOpen(false)}
+          onShowDetails={setDetailsFor}
         />
+      )}
+
+      {detailsFor && (
+        <ExerciseDetailsModal exercise={detailsFor} onClose={() => setDetailsFor(null)} />
       )}
     </div>
   );
@@ -249,11 +265,13 @@ function ExercisePicker({
   excludeIds,
   onPick,
   onClose,
+  onShowDetails,
 }: {
   exercises: ExerciseMeta[];
   excludeIds: string[];
   onPick: (id: string) => void;
   onClose: () => void;
+  onShowDetails: (ex: ExerciseMeta) => void;
 }) {
   const t = useT();
   const favorites = useFavoriteIds();
@@ -272,10 +290,10 @@ function ExercisePicker({
     const name = t.exerciseName[ex.id] ?? ex.name;
     const isFav = favorites.has(ex.id);
     return (
-      <li key={ex.id}>
+      <li key={ex.id} className="flex items-stretch border-b border-slate-800 hover:bg-slate-800">
         <button
           onClick={() => onPick(ex.id)}
-          className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
+          className="flex-1 min-w-0 text-left px-4 py-3 flex items-center gap-3"
         >
           {ex.images[0] ? (
             <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
@@ -287,6 +305,13 @@ function ExercisePicker({
             <div className="text-xs text-slate-400 truncate capitalize">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
           </div>
           {isFav && <span className="text-amber-400 text-sm shrink-0">★</span>}
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onShowDetails(ex); }}
+          aria-label={t.library.viewDetails}
+          className="px-3 text-slate-400 hover:text-keung-500 border-l border-slate-800"
+        >
+          ⓘ
         </button>
       </li>
     );

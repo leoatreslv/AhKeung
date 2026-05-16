@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type SetLog, type WorkoutSession } from '../db';
-import { imageUrl } from '../exercises';
+import { imageUrl, type ExerciseMeta } from '../exercises';
 import { useExercises } from '../useExercises';
 import { todayISO, formatDuration } from '../utils';
 import { useT } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
+import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
 
 export function Workout() {
   const t = useT();
@@ -22,6 +23,7 @@ export function Workout() {
   const [session, setSession] = useState<WorkoutSession | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [detailsFor, setDetailsFor] = useState<ExerciseMeta | null>(null);
   const [startedAt] = useState(() => Date.now());
   const [date] = useState(() => todayISO());
 
@@ -144,6 +146,15 @@ export function Workout() {
                   <div className="font-semibold text-sm truncate">{name}</div>
                   {meta && <div className="text-xs text-slate-400 truncate capitalize">{meta.equipment}</div>}
                 </div>
+                {meta && (
+                  <button
+                    onClick={() => setDetailsFor(meta)}
+                    aria-label={t.library.viewDetails}
+                    className="text-slate-400 hover:text-keung-500 px-1"
+                  >
+                    ⓘ
+                  </button>
+                )}
                 <button onClick={() => removeExercise(exIdx)} className="text-slate-500 hover:text-rose-400">✕</button>
               </div>
               <div className="px-3 py-2">
@@ -230,10 +241,10 @@ export function Workout() {
                   const name = t.exerciseName[ex.id] ?? ex.name;
                   const isFav = favorites.has(ex.id);
                   return (
-                    <li key={ex.id}>
+                    <li key={ex.id} className="flex items-stretch border-b border-slate-800 hover:bg-slate-800">
                       <button
                         onClick={() => addExercise(ex.id)}
-                        className="w-full text-left px-4 py-3 border-b border-slate-800 flex items-center gap-3 hover:bg-slate-800"
+                        className="flex-1 min-w-0 text-left px-4 py-3 flex items-center gap-3"
                       >
                         {ex.images[0] ? (
                           <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
@@ -245,6 +256,13 @@ export function Workout() {
                           <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
                         </div>
                         {isFav && <span className="text-amber-400 text-sm shrink-0">★</span>}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDetailsFor(ex); }}
+                        aria-label={t.library.viewDetails}
+                        className="px-3 text-slate-400 hover:text-keung-500 border-l border-slate-800"
+                      >
+                        ⓘ
                       </button>
                     </li>
                   );
@@ -269,6 +287,10 @@ export function Workout() {
             </ul>
           </div>
         </div>
+      )}
+
+      {detailsFor && (
+        <ExerciseDetailsModal exercise={detailsFor} onClose={() => setDetailsFor(null)} />
       )}
     </div>
   );
