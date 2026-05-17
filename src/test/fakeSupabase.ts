@@ -15,6 +15,9 @@ type QueryResult = { data: Row[] | null; error: Error | null };
 interface Builder extends PromiseLike<QueryResult> {
   select(cols?: string): Builder;
   eq(col: string, val: unknown): Builder;
+  gte(col: string, val: unknown): Builder;
+  order(col: string, opts?: { ascending?: boolean }): Builder;
+  limit(n: number): Builder;
   insert(row: Row | Row[]): Builder;
   update(row: Row): Builder;
   upsert(row: Row | Row[]): Builder;
@@ -43,7 +46,7 @@ export function createFakeSupabase() {
   }
 
   function builder(tableName: string): Builder {
-    const filters: { col: string; val: unknown }[] = [];
+    const filters: { col: string; val: unknown; op: 'eq' | 'gte' }[] = [];
     let action: 'select' | 'insert' | 'update' | 'delete' | 'upsert' = 'select';
     let payload: Row | Row[] | undefined;
     let selectedAfter = false;
@@ -53,7 +56,13 @@ export function createFakeSupabase() {
       requireNetwork();
       const arr = tables[tableName] ?? (tables[tableName] = []);
       const match = (r: Row) =>
-        filters.every((f) => (r as Record<string, unknown>)[f.col] === f.val);
+        filters.every((f) => {
+          const v = (r as Record<string, unknown>)[f.col];
+          if (f.op === 'gte') {
+            return (v as string | number) >= (f.val as string | number);
+          }
+          return v === f.val;
+        });
 
       if (action === 'select') {
         const data = arr.filter(match).map((r) => ({ ...r }));
@@ -108,7 +117,13 @@ export function createFakeSupabase() {
         else { selectedAfter = true; }
         return api;
       },
-      eq(col: string, val: unknown) { filters.push({ col, val }); return api; },
+      eq(col: string, val: unknown) { filters.push({ col, val, op: 'eq' }); return api; },
+      gte(col: string, val: unknown) { filters.push({ col, val, op: 'gte' }); return api; },
+      order(_col: string, _opts?: { ascending?: boolean }) {
+        void _col; void _opts;
+        return api;
+      },
+      limit(_n: number) { void _n; return api; },
       insert(row: Row | Row[]) { action = 'insert'; payload = row; return api; },
       update(row: Row) { action = 'update'; payload = row; return api; },
       upsert(row: Row | Row[]) { action = 'upsert'; payload = row; return api; },
