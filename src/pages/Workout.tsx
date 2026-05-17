@@ -8,6 +8,8 @@ import { todayISO, formatDuration } from '../utils';
 import { useT } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
 import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
+import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { putWithSync } from '../sync/putWithSync';
 
 export function Workout() {
   const t = useT();
@@ -16,11 +18,13 @@ export function Workout() {
   const catalog = useExercises();
   const favorites = useFavoriteIds();
   const plan = useLiveQuery(
-    async () => (planId ? await db.plans.get(Number(planId)) : undefined),
+    async () => (planId ? await db.plans.get(planId) : undefined),
     [planId],
   );
 
-  const [session, setSession] = useState<WorkoutSession | null>(null);
+  type SessionDraft = Pick<WorkoutSession, 'planId' | 'date' | 'exercises' | 'notes' | 'startedAt'>;
+  const [session, setSession] = useState<SessionDraft | null>(null);
+  const userId = useCurrentUserId();
   const [elapsed, setElapsed] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [detailsFor, setDetailsFor] = useState<ExerciseMeta | null>(null);
@@ -99,10 +103,17 @@ export function Workout() {
 
   const finish = async () => {
     const done = session.exercises.some((e) => e.sets.some((s) => s.done));
-    if (!done) {
-      if (!confirm(t.workout.noSetsDoneConfirm)) return;
-    }
-    await db.sessions.add({ ...session, endedAt: Date.now() });
+    if (!done) { if (!confirm(t.workout.noSetsDoneConfirm)) return; }
+    if (!userId) return;
+    await putWithSync('sessions', {
+      id: crypto.randomUUID(),
+      planId: session.planId,
+      date: session.date,
+      exercises: session.exercises,
+      notes: session.notes,
+      startedAt: session.startedAt,
+      endedAt: Date.now(),
+    }, userId);
     navigate('/');
   };
 

@@ -9,7 +9,7 @@ import { useExercises } from '../useExercises';
 export function Home() {
   const { t, locale } = useI18n();
   const catalog = useExercises();
-  const [openSessionId, setOpenSessionId] = useState<number | null>(null);
+  const [openSessionId, setOpenSessionId] = useState<string | null>(null);
   const wk = weekStartISO();
   const currentPlan = useLiveQuery(
     () => db.plans.where('weekStart').equals(wk).first(),
@@ -116,12 +116,12 @@ export function Home() {
             {recentSessions.map((s) => {
               const sessionId = s.id;
               const totalSetsDone = s.exercises.reduce((sum, ex) => sum + ex.sets.filter((x) => x.done).length, 0);
-              const isOpen = sessionId !== undefined && openSessionId === sessionId;
+              const isOpen = openSessionId === sessionId;
               const duration = s.endedAt && s.startedAt ? s.endedAt - s.startedAt : null;
               return (
                 <li key={sessionId} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
                   <button
-                    onClick={() => sessionId !== undefined && setOpenSessionId(isOpen ? null : sessionId)}
+                    onClick={() => setOpenSessionId(isOpen ? null : sessionId)}
                     className="w-full text-left p-3 flex items-center gap-2"
                   >
                     <div className="flex-1 min-w-0">

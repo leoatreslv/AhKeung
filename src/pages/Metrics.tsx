@@ -4,9 +4,12 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { db } from '../db';
 import { todayISO, formatDate } from '../utils';
 import { useI18n } from '../i18n';
+import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { putWithSync, deleteWithSync } from '../sync/putWithSync';
 
 export function Metrics() {
   const { t, locale } = useI18n();
+  const userId = useCurrentUserId();
   const metrics = useLiveQuery(() => db.metrics.orderBy('date').toArray(), []);
 
   const [date, setDate] = useState(todayISO());
@@ -18,24 +21,23 @@ export function Metrics() {
   const latestHeight = metrics?.slice().reverse().find((m) => m.heightCm)?.heightCm;
 
   const save = async () => {
-    if (!weight && !height && !bodyFat && !notes.trim()) {
-      alert(t.metrics.enterValue);
-      return;
-    }
-    await db.metrics.add({
+    if (!weight && !height && !bodyFat && !notes.trim()) { alert(t.metrics.enterValue); return; }
+    if (!userId) return;
+    await putWithSync('metrics', {
+      id: crypto.randomUUID(),
       date,
       weightKg: weight ? Number(weight) : undefined,
       heightCm: height ? Number(height) : undefined,
       bodyFatPct: bodyFat ? Number(bodyFat) : undefined,
       notes: notes.trim() || undefined,
-    });
-    setWeight('');
-    setBodyFat('');
-    setNotes('');
+    }, userId);
+    setWeight(''); setBodyFat(''); setNotes('');
   };
 
-  const remove = async (id: number) => {
-    if (confirm(t.metrics.deleteConfirm)) await db.metrics.delete(id);
+  const remove = async (id: string) => {
+    if (confirm(t.metrics.deleteConfirm)) {
+      await deleteWithSync('metrics', id);
+    }
   };
 
   const chartData = (metrics ?? [])
@@ -152,7 +154,7 @@ export function Metrics() {
                   {m.bodyFatPct && <span>{m.bodyFatPct}%</span>}
                   {m.notes && <span className="text-slate-400 truncate">{m.notes}</span>}
                 </div>
-                <button onClick={() => remove(m.id!)} className="text-slate-500 hover:text-rose-400 text-xs">✕</button>
+                <button onClick={() => remove(m.id)} className="text-slate-500 hover:text-rose-400 text-xs">✕</button>
               </li>
             ))}
           </ul>
