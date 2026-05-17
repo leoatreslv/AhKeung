@@ -94,8 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         await applySession(session);
-      } catch (e) {
-        console.warn('[auth] bootstrap failed:', e);
+      } catch {
+        // Bootstrap threw (network, bad code exchange, etc.) — fall through
+        // to the Login screen so the user can retry.
         if (!cancelled) {
           userIdRef.current = null;
           setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
