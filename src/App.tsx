@@ -1,3 +1,4 @@
+import { useEffect, type ReactNode } from 'react';
 import { HashRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom';
 import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
@@ -7,11 +8,24 @@ import { Library } from './pages/Library';
 import { Metrics } from './pages/Metrics';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useT } from './i18n';
+import { useAuth } from './auth/useAuth';
+import { Login } from './auth/Login';
+import { startSync, stopSync } from './sync';
+
+function Guarded({ children }: { children: ReactNode }) {
+  const { status } = useAuth();
+  useEffect(() => {
+    if (status === 'authenticated') { startSync(); return () => stopSync(); }
+  }, [status]);
+  if (status === 'loading') return <div className="p-6 text-slate-400">Loading…</div>;
+  if (status === 'unauthenticated') return <Login />;
+  return <>{children}</>;
+}
 
 function App() {
   return (
     <HashRouter>
-      <Shell />
+      <Guarded><Shell /></Guarded>
     </HashRouter>
   );
 }
