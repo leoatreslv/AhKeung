@@ -43,34 +43,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function bootstrap() {
-      const { data: { session } } = await getSupabase().auth.getSession();
-      if (!session) {
-        userIdRef.current = null;
-        if (!cancelled) setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
-        return;
-      }
-      let profile: Profile | null = null;
       try {
-        profile = await fetchProfile(session.user.id);
-        if (profile) localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(profile));
-      } catch {
-        // Offline or transient failure — fall back to the cached profile.
-        // Guard JSON.parse so corrupt cache (manual tamper, partial write,
-        // schema migration) doesn't strand the user on the loading splash.
-        const cached = localStorage.getItem(LAST_PROFILE_KEY);
-        if (cached) {
-          try { profile = JSON.parse(cached) as Profile; }
-          catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
+        // PKCE: if Supabase JS hasn't already swept the ?code= from the URL
+        // (or detectSessionInUrl missed it), do the exchange explicitly so we
+        // get a real error to surface instead of a silent stuck-on-loading.
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get('code');
+        if (code) {
+          const { error } = await getSupabase().auth.exchangeCodeForSession(code);
+          if (error) {
+            console.warn('[auth] exchangeCodeForSession failed:', error);
+          }
+          url.searchParams.delete('code');
+          window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+        }
+
+        const { data: { session } } = await getSupabase().auth.getSession();
+        if (!session) {
+          userIdRef.current = null;
+          if (!cancelled) setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
+          return;
+        }
+        let profile: Profile | null = null;
+        try {
+          profile = await fetchProfile(session.user.id);
+          if (profile) localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(profile));
+        } catch {
+          // Offline or transient failure — fall back to the cached profile.
+          // Guard JSON.parse so corrupt cache (manual tamper, partial write,
+          // schema migration) doesn't strand the user on the loading splash.
+          const cached = localStorage.getItem(LAST_PROFILE_KEY);
+          if (cached) {
+            try { profile = JSON.parse(cached) as Profile; }
+            catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
+          }
+        }
+        if (cancelled) return;
+        userIdRef.current = session.user.id;
+        setState({
+          status: 'authenticated',
+          user: { id: session.user.id, email: session.user.email ?? '' },
+          profile,
+          signOut: async () => { await performSignOut(); },
+        });
+      } catch (e) {
+        // Anything thrown during bootstrap (network, bad PKCE exchange,
+        // unexpected client error) should fall through to a usable screen
+        // instead of stranding the user on the loading splash.
+        console.warn('[auth] bootstrap failed:', e);
+        if (!cancelled) {
+          userIdRef.current = null;
+          setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
         }
       }
-      if (cancelled) return;
-      userIdRef.current = session.user.id;
-      setState({
-        status: 'authenticated',
-        user: { id: session.user.id, email: session.user.email ?? '' },
-        profile,
-        signOut: async () => { await performSignOut(); },
-      });
     }
 
     bootstrap();
