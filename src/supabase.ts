@@ -16,6 +16,14 @@ function buildRealClient(): SupabaseClient {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      // PKCE binds the magic link to a verifier stored in this browser's
+      // localStorage. Defeats email-scanner pre-fetch (Gmail safe browsing,
+      // Outlook SafeLinks) since the scanner has no verifier and gets bounced;
+      // only the real tap from the same browser can complete the exchange.
+      // Trade-off: dashboard "Send/Generate Magic Link" and cross-device link
+      // clicks stop working — those don't go through signInWithOtp, so no
+      // verifier exists for them.
+      flowType: 'pkce',
     },
   });
 }
