@@ -16,7 +16,14 @@ export function Home() {
     [wk],
   );
   const recentSessions = useLiveQuery(
-    () => db.sessions.orderBy('startedAt').reverse().limit(5).toArray(),
+    // v4 schema dropped the startedAt index; use the indexed `date` field,
+    // then resolve same-day ordering by startedAt in memory.
+    async () => {
+      const rows = await db.sessions.orderBy('date').reverse().limit(20).toArray();
+      return rows
+        .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+        .slice(0, 5);
+    },
     [],
   );
   const latestMetric = useLiveQuery(
