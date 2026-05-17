@@ -7,7 +7,12 @@ import { useI18n } from '../i18n';
 export function Plans() {
   const { t, locale } = useI18n();
   const plans = useLiveQuery(
-    () => db.plans.orderBy('createdAt').reverse().toArray(),
+    // v4 schema indexes id, userId, weekStart, updatedAt — but not createdAt.
+    // Sort by createdAt in memory; gym-scale plan counts make this trivial.
+    async () => {
+      const rows = await db.plans.toArray();
+      return rows.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    },
     [],
   );
 
