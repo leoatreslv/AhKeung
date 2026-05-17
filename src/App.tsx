@@ -11,12 +11,19 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useT } from './i18n';
 import { useAuth } from './auth/useAuth';
 import { Login } from './auth/Login';
-import { startSync, stopSync } from './sync';
+import { startSync, stopSync, flushNow } from './sync';
 
 function Guarded({ children }: { children: ReactNode }) {
   const { status } = useAuth();
   useEffect(() => {
-    if (status === 'authenticated') { startSync(); return () => stopSync(); }
+    if (status === 'authenticated') {
+      startSync();
+      // Kick an immediate flush so a fresh sign-in (e.g. after sign-out
+      // wiped the local Dexie) pulls the user's server-side data right
+      // away, instead of waiting up to 60s for the first pull tick.
+      void flushNow();
+      return () => stopSync();
+    }
   }, [status]);
   if (status === 'loading') return <div className="p-6 text-slate-400">Loading…</div>;
   if (status === 'unauthenticated') return <Login />;

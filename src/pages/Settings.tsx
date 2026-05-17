@@ -50,7 +50,19 @@ export function Settings() {
 
   return (
     <div className="p-4 space-y-4 text-slate-100">
-      <h2 className="text-lg font-bold">Settings</h2>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => navigate('/')}
+          aria-label="back"
+          className="text-slate-300 text-xl leading-none px-1"
+        >←</button>
+        <h2 className="text-lg font-bold">Settings</h2>
+        {profile?.isTrainer && (
+          <span className="ml-auto text-[10px] uppercase tracking-wider bg-keung-600/30 border border-keung-600/60 text-keung-300 px-2 py-0.5 rounded-full">
+            Trainer
+          </span>
+        )}
+      </div>
       <div>
         <label className="text-xs text-slate-400 block mb-1">Display name</label>
         <input
