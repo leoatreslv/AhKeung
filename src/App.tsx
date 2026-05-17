@@ -1,3 +1,4 @@
+import { useEffect, type ReactNode } from 'react';
 import { HashRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom';
 import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
@@ -5,13 +6,27 @@ import { PlanEditor } from './pages/PlanEditor';
 import { Workout } from './pages/Workout';
 import { Library } from './pages/Library';
 import { Metrics } from './pages/Metrics';
+import { Settings } from './pages/Settings';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useT } from './i18n';
+import { useAuth } from './auth/useAuth';
+import { Login } from './auth/Login';
+import { startSync, stopSync } from './sync';
+
+function Guarded({ children }: { children: ReactNode }) {
+  const { status } = useAuth();
+  useEffect(() => {
+    if (status === 'authenticated') { startSync(); return () => stopSync(); }
+  }, [status]);
+  if (status === 'loading') return <div className="p-6 text-slate-400">Loading…</div>;
+  if (status === 'unauthenticated') return <Login />;
+  return <>{children}</>;
+}
 
 function App() {
   return (
     <HashRouter>
-      <Shell />
+      <Guarded><Shell /></Guarded>
     </HashRouter>
   );
 }
@@ -30,7 +45,10 @@ function Shell() {
           <h1 className="text-xl font-bold leading-none">{t.appName}</h1>
           <span className="text-xs text-slate-400">{t.tagline}</span>
         </div>
-        <LanguageSwitcher />
+        <div className="flex items-center gap-2">
+          <LanguageSwitcher />
+          <NavLink to="/settings" aria-label="settings" className="text-slate-300 text-xl">⚙️</NavLink>
+        </div>
       </header>
 
       <main className="flex-1 overflow-y-auto pb-20">
@@ -43,6 +61,7 @@ function Shell() {
           <Route path="/workout/:planId" element={<Workout />} />
           <Route path="/library" element={<Library />} />
           <Route path="/metrics" element={<Metrics />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>

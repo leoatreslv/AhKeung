@@ -13,6 +13,8 @@ import { weekStartISO } from '../utils';
 import { useT } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
 import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
+import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { putWithSync, deleteWithSync } from '../sync/putWithSync';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -22,7 +24,8 @@ export function PlanEditor() {
   const t = useT();
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  const planId = id ? Number(id) : undefined;
+  const planId = id;
+  const userId = useCurrentUserId();
   const catalog = useExercises();
 
   const existing = useLiveQuery(
@@ -36,7 +39,7 @@ export function PlanEditor() {
   const [planExercises, setPlanExercises] = useState<PlanExercise[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [detailsFor, setDetailsFor] = useState<ExerciseMeta | null>(null);
-  const [loadedFromId, setLoadedFromId] = useState<number | undefined>(undefined);
+  const [loadedFromId, setLoadedFromId] = useState<string | undefined>(undefined);
 
   if (existing && existing.id !== loadedFromId) {
     setLoadedFromId(existing.id);
@@ -73,29 +76,24 @@ export function PlanEditor() {
     setPlanExercises((arr) => arr.map((p) => (p.exerciseId === exId ? { ...p, ...patch } : p)));
 
   const save = async () => {
-    if (!name.trim()) {
-      alert(t.planEditor.nameRequired);
-      return;
-    }
-    const data = {
+    if (!name.trim()) { alert(t.planEditor.nameRequired); return; }
+    if (!userId) return;
+    const newId = planId ?? crypto.randomUUID();
+    await putWithSync('plans', {
+      id: newId,
       name: name.trim(),
       weekStart,
       focus,
       exercises: planExercises,
       createdAt: existing?.createdAt ?? Date.now(),
-    };
-    if (planId) {
-      await db.plans.update(planId, data);
-    } else {
-      await db.plans.add(data);
-    }
+    }, userId);
     navigate('/plans');
   };
 
   const remove = async () => {
     if (!planId) return;
     if (!confirm(t.planEditor.deleteConfirm)) return;
-    await db.plans.delete(planId);
+    await deleteWithSync('plans', planId);
     navigate('/plans');
   };
 

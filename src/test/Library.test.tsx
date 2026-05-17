@@ -5,6 +5,7 @@ import { I18nProvider } from '../i18n';
 import { Library } from '../pages/Library';
 import { __resetExercisesForTest } from '../exercises';
 import { db } from '../db';
+import { stubAuthenticatedUser } from './authStub';
 
 function renderLibrary() {
   return render(
@@ -21,6 +22,7 @@ describe('Library page', () => {
     __resetExercisesForTest();
     await db.delete();
     await db.open();
+    stubAuthenticatedUser({ id: 'u-test' });
   });
 
   it('shows a loading state then renders the catalog', async () => {
