@@ -41,112 +41,106 @@ async function bumpAttempts(entry: SyncQueueRow, err: unknown): Promise<void> {
   });
 }
 
+async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promise<void> {
+  if (entry.op === 'insert') {
+    const local = await localRowFor(entry);
+    if (!local) { await db.syncQueue.delete(entry.seq!); return; }
+    const payload = toServerRow(local);
+    const res = await getSupabase().from(entry.table).insert(payload).select() as
+      { data: { updated_at: string }[] | null; error: { message: string } | null };
+    if (res.error) throw new Error(res.error.message);
+    const inserted = res.data?.[0];
+    if (inserted?.updated_at) await setLocalServerVersion(entry.table, entry.rowId, inserted.updated_at);
+    await db.syncQueue.delete(entry.seq!);
+    return;
+  }
+  if (entry.op === 'update') {
+    const local = await localRowFor(entry);
+    if (!local) { await db.syncQueue.delete(entry.seq!); return; }
+    const payload = toServerRow(local);
+    let q = getSupabase().from(entry.table).update(payload).eq('id', entry.rowId);
+    if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);
+    const res = await q.select() as { data: { updated_at: string }[] | null; error: { message: string } | null };
+    if (res.error) throw new Error(res.error.message);
+    const updated = res.data?.[0];
+    if (updated?.updated_at) {
+      await setLocalServerVersion(entry.table, entry.rowId, updated.updated_at);
+      await db.syncQueue.delete(entry.seq!);
+      return;
+    }
+    const pulled = await getSupabase().from(entry.table).select('*').eq('id', entry.rowId) as
+      { data: Record<string, unknown>[] | null; error: { message: string } | null };
+    const serverRow = pulled.data?.[0];
+    if (!serverRow) { await db.syncQueue.delete(entry.seq!); return; }
+    const conflictAttempts = (entry.attempts ?? 0) + 1;
+    if (conflictAttempts >= 3) { await moveToDeadLetter(entry, 'repeated conflict'); return; }
+    const newExpected = serverRow.updated_at as string;
+    await db.syncQueue.update(entry.seq!, { expectedServerVersion: newExpected, attempts: conflictAttempts });
+    await setLocalServerVersion(entry.table, entry.rowId, newExpected);
+    const refreshed = (await db.syncQueue.get(entry.seq!))!;
+    entries.unshift(refreshed);
+    return;
+  }
+  if (entry.op === 'delete') {
+    let q = getSupabase().from(entry.table).update({ deleted_at: new Date().toISOString() }).eq('id', entry.rowId);
+    if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);
+    const res = await q.select() as { data: unknown[] | null; error: { message: string } | null };
+    if (res.error) throw new Error(res.error.message);
+    if (res.data && res.data.length > 0) {
+      await db.syncQueue.delete(entry.seq!);
+      return;
+    }
+    // Conditional missed — server moved since we pulled. Mirror the update path:
+    // pull the current updated_at, advance expectedServerVersion, retry once.
+    const pulled = await getSupabase().from(entry.table).select('updated_at').eq('id', entry.rowId) as
+      { data: { updated_at: string }[] | null };
+    const serverRow = pulled.data?.[0];
+    if (!serverRow) { await db.syncQueue.delete(entry.seq!); return; }  // already gone server-side
+    const conflictAttempts = (entry.attempts ?? 0) + 1;
+    if (conflictAttempts >= 3) { await moveToDeadLetter(entry, 'delete conflict'); return; }
+    await db.syncQueue.update(entry.seq!, {
+      expectedServerVersion: serverRow.updated_at, attempts: conflictAttempts,
+    });
+    entries.unshift((await db.syncQueue.get(entry.seq!))!);
+  }
+}
+
 export async function runPushOnce(): Promise<void> {
   const entries = await db.syncQueue.orderBy('seq').toArray();
   while (entries.length > 0) {
     const entry = entries.shift()!;
-    try {
-      if (entry.op === 'insert') {
-        const local = await localRowFor(entry);
-        if (!local) { await db.syncQueue.delete(entry.seq!); continue; }
-        const payload = toServerRow(local);
-        const res = await getSupabase().from(entry.table).insert(payload).select() as
-          { data: { updated_at: string }[] | null; error: { message: string } | null };
-        if (res.error) throw new Error(res.error.message);
-        const inserted = res.data?.[0];
-        if (inserted?.updated_at) {
-          await setLocalServerVersion(entry.table, entry.rowId, inserted.updated_at);
+    let attempt = 0;
+    while (true) {
+      try {
+        await processEntry(entry, entries);
+        break;
+      } catch (err) {
+        const kind = classifyError(err);
+        if (kind === 'auth' && attempt === 0) {
+          attempt++;
+          await getSupabase().auth.refreshSession();
+          continue;  // one retry after refresh
         }
-        await db.syncQueue.delete(entry.seq!);
-      } else if (entry.op === 'update') {
-        const local = await localRowFor(entry);
-        if (!local) { await db.syncQueue.delete(entry.seq!); continue; }
-        const payload = toServerRow(local);
-        let q = getSupabase().from(entry.table).update(payload).eq('id', entry.rowId);
-        if (entry.expectedServerVersion !== null) {
-          q = q.eq('updated_at', entry.expectedServerVersion);
-        }
-        const res = await q.select() as { data: { updated_at: string }[] | null; error: { message: string } | null };
-        if (res.error) throw new Error(res.error.message);
-        const updated = res.data?.[0];
-        if (updated?.updated_at) {
-          await setLocalServerVersion(entry.table, entry.rowId, updated.updated_at);
-          await db.syncQueue.delete(entry.seq!);
-        } else {
-          // Conflict — pull latest, advance expectedServerVersion, retry.
-          const pulled = await getSupabase().from(entry.table).select('*').eq('id', entry.rowId) as
-            { data: Record<string, unknown>[] | null; error: { message: string } | null };
-          const serverRow = pulled.data?.[0];
-          if (!serverRow) {
-            await db.syncQueue.delete(entry.seq!);
-            continue;
+        if (kind === 'fatal') {
+          const newAttempts = (entry.attempts ?? 0) + 1;
+          if (newAttempts >= 3) {
+            await moveToDeadLetter({ ...entry, attempts: newAttempts,
+              lastError: err instanceof Error ? err.message : String(err) },
+              err instanceof Error ? err.message : String(err));
+          } else {
+            await bumpAttempts(entry, err);
           }
-          const conflictAttempts = (entry.attempts ?? 0) + 1;
-          if (conflictAttempts >= 3) {
-            await moveToDeadLetter(entry, 'repeated conflict');
-            continue;
-          }
-          const newExpected = serverRow.updated_at as string;
-          await db.syncQueue.update(entry.seq!, {
-            expectedServerVersion: newExpected, attempts: conflictAttempts,
-          });
-          await setLocalServerVersion(entry.table, entry.rowId, newExpected);
-          const refreshed = (await db.syncQueue.get(entry.seq!))!;
-          entries.unshift(refreshed);
+          break;
         }
-      } else if (entry.op === 'delete') {
-        let q = getSupabase().from(entry.table)
-          .update({ deleted_at: new Date().toISOString() })
-          .eq('id', entry.rowId);
-        if (entry.expectedServerVersion !== null) {
-          q = q.eq('updated_at', entry.expectedServerVersion);
-        }
-        const res = await q.select() as { data: unknown[] | null; error: { message: string } | null };
-        if (res.error) throw new Error(res.error.message);
-        if (res.data && res.data.length > 0) {
-          await db.syncQueue.delete(entry.seq!);
-        } else {
-          // Conditional missed — server moved since we pulled. Pull current
-          // updated_at, advance expectedServerVersion, retry.
-          const pulled = await getSupabase().from(entry.table).select('updated_at').eq('id', entry.rowId) as
-            { data: { updated_at: string }[] | null };
-          const serverRow = pulled.data?.[0];
-          if (!serverRow) {
-            await db.syncQueue.delete(entry.seq!);  // already gone server-side
-            continue;
-          }
-          const conflictAttempts = (entry.attempts ?? 0) + 1;
-          if (conflictAttempts >= 3) {
-            await moveToDeadLetter(entry, 'delete conflict');
-            continue;
-          }
-          await db.syncQueue.update(entry.seq!, {
-            expectedServerVersion: serverRow.updated_at, attempts: conflictAttempts,
-          });
-          entries.unshift((await db.syncQueue.get(entry.seq!))!);
-        }
-      }
-    } catch (err) {
-      const kind = classifyError(err);
-      if (kind === 'fatal') {
-        const newAttempts = (entry.attempts ?? 0) + 1;
-        if (newAttempts >= 3) {
-          await moveToDeadLetter({ ...entry, attempts: newAttempts,
-            lastError: err instanceof Error ? err.message : String(err) },
-            err instanceof Error ? err.message : String(err));
-        } else {
+        if (kind === 'auth') {
+          // refresh-and-retry already attempted; rethrow so AuthProvider can sign out.
           await bumpAttempts(entry, err);
+          throw err;
         }
-        continue;
-      }
-      if (kind === 'auth') {
-        // Defer handling to Task 16 — for now, bump attempts and rethrow.
+        // network — bump and stop the loop entirely
         await bumpAttempts(entry, err);
         throw err;
       }
-      // network: bump attempts and stop the loop (caller will retry later)
-      await bumpAttempts(entry, err);
-      throw err;
     }
   }
 }

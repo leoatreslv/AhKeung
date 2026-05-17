@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { db } from '../db';
 import { putWithSync, deleteWithSync } from './putWithSync';
 import { runPushOnce } from './pushWorker';
@@ -149,6 +149,39 @@ describe('pushWorker — network failure retries silently', () => {
 
     fake.setNetworkUp(true);
     await runPushOnce();
+    expect(await db.syncQueue.count()).toBe(0);
+  });
+});
+
+describe('pushWorker — 401 refresh-and-retry', () => {
+  it('calls auth.refreshSession() and retries once before giving up', async () => {
+    const fake = stubAuthenticatedUser({ id: 'u-1' });
+    let firstCall = true;
+    const refreshSpy = vi.spyOn(fake.client.auth, 'refreshSession');
+    const origFrom = fake.client.from.bind(fake.client);
+    fake.client.from = ((name: string) => {
+      const b = origFrom(name);
+      const origInsert = b.insert;
+      b.insert = (row: unknown) => {
+        const q = origInsert(row);
+        if (firstCall) {
+          firstCall = false;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          q.then = (_r: any, reject: any) =>
+            Promise.reject(Object.assign(new Error('401'), { status: 401 }))
+              .then(undefined, reject);
+        }
+        return q;
+      };
+      return b;
+    }) as typeof fake.client.from;
+
+    await putWithSync('plans', {
+      id: 'p1', name: 'X', weekStart: '2025-03-10', focus: [], exercises: [], createdAt: 1,
+    }, 'u-1');
+    await runPushOnce();
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(await db.syncQueue.count()).toBe(0);
   });
 });
