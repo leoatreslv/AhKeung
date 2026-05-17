@@ -42,43 +42,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    async function bootstrap() {
+    async function bootstrap(label: string) {
+      console.log(`[auth] bootstrap(${label}) START`);
       try {
-        // PKCE: if Supabase JS hasn't already swept the ?code= from the URL
-        // (or detectSessionInUrl missed it), do the exchange explicitly so we
-        // get a real error to surface instead of a silent stuck-on-loading.
         const url = new URL(window.location.href);
         const code = url.searchParams.get('code');
         if (code) {
+          console.log(`[auth] bootstrap(${label}) found ?code= — exchanging`);
           const { error } = await getSupabase().auth.exchangeCodeForSession(code);
           if (error) {
-            console.warn('[auth] exchangeCodeForSession failed:', error);
+            console.warn(`[auth] bootstrap(${label}) exchangeCodeForSession error:`, error);
+          } else {
+            console.log(`[auth] bootstrap(${label}) exchange OK`);
           }
           url.searchParams.delete('code');
           window.history.replaceState({}, '', url.pathname + url.search + url.hash);
         }
 
+        console.log(`[auth] bootstrap(${label}) getSession`);
         const { data: { session } } = await getSupabase().auth.getSession();
+        console.log(`[auth] bootstrap(${label}) session =`, session?.user?.id ?? null);
         if (!session) {
           userIdRef.current = null;
           if (!cancelled) setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
+          console.log(`[auth] bootstrap(${label}) → unauthenticated (cancelled=${cancelled})`);
           return;
         }
         let profile: Profile | null = null;
         try {
+          console.log(`[auth] bootstrap(${label}) fetchProfile`);
           profile = await fetchProfile(session.user.id);
+          console.log(`[auth] bootstrap(${label}) profile =`, profile);
           if (profile) localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(profile));
-        } catch {
-          // Offline or transient failure — fall back to the cached profile.
-          // Guard JSON.parse so corrupt cache (manual tamper, partial write,
-          // schema migration) doesn't strand the user on the loading splash.
+        } catch (e) {
+          console.warn(`[auth] bootstrap(${label}) fetchProfile failed, falling back to cache:`, e);
           const cached = localStorage.getItem(LAST_PROFILE_KEY);
           if (cached) {
             try { profile = JSON.parse(cached) as Profile; }
             catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
           }
         }
-        if (cancelled) return;
+        if (cancelled) {
+          console.log(`[auth] bootstrap(${label}) cancelled before setState — bailing`);
+          return;
+        }
         userIdRef.current = session.user.id;
         setState({
           status: 'authenticated',
@@ -86,11 +93,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           profile,
           signOut: async () => { await performSignOut(); },
         });
+        console.log(`[auth] bootstrap(${label}) → authenticated`);
       } catch (e) {
-        // Anything thrown during bootstrap (network, bad PKCE exchange,
-        // unexpected client error) should fall through to a usable screen
-        // instead of stranding the user on the loading splash.
-        console.warn('[auth] bootstrap failed:', e);
+        console.warn(`[auth] bootstrap(${label}) FAILED:`, e);
         if (!cancelled) {
           userIdRef.current = null;
           setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
@@ -98,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    bootstrap();
+    bootstrap('mount');
 
     const { data: { subscription } } = getSupabase().auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
@@ -111,7 +116,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
         return;
       }
-      if (event === 'SIGNED_IN' && session) await bootstrap();
+      console.log(`[auth] onAuthStateChange event=${event} user=${session?.user?.id ?? null}`);
+      if (event === 'SIGNED_IN' && session) await bootstrap('SIGNED_IN');
     });
 
     const onVisible = async () => {
