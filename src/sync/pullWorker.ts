@@ -30,10 +30,14 @@ async function mergeRow(table: SyncTableName, serverRow: Record<string, unknown>
   }
 
   const camel = fromServerRow(serverRow, table);
+  // serverVersion is the server-side updated_at ISO string used by the OCC
+  // layer. Read it from the raw row — fromServerRow now converts *_at strings
+  // back to epoch ms for Dexie storage, so camel.updatedAt is a number here.
+  const serverVersion = serverRow.updated_at as string;
   const local = table === 'favorites'
     ? { userId, exerciseId: camel.exerciseId as string, addedAt: camel.addedAt as number,
-        updatedAt: Date.now(), serverVersion: camel.updatedAt as string }
-    : { ...camel, userId, updatedAt: Date.now(), serverVersion: camel.updatedAt as string };
+        updatedAt: Date.now(), serverVersion }
+    : { ...camel, userId, updatedAt: Date.now(), serverVersion };
   await db.table(table).put(local as never);
 }
 

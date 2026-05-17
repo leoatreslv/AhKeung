@@ -22,11 +22,32 @@ function camelToSnake(s: string): string {
 
 const CLIENT_ONLY_FIELDS = new Set(['serverVersion']);
 
+// Fields whose values are epoch-ms on the client and timestamptz on the server.
+// We convert on the way out (ms → ISO) and back on the way in (ISO → ms) so the
+// Dexie schema stays uniformly number-typed and PostgREST accepts the payloads.
+const TIMESTAMP_FIELDS_CAMEL = new Set([
+  'createdAt', 'updatedAt', 'deletedAt', 'startedAt', 'endedAt', 'addedAt',
+]);
+const TIMESTAMP_FIELDS_SNAKE = new Set([
+  'created_at', 'updated_at', 'deleted_at', 'started_at', 'ended_at', 'added_at',
+]);
+
+function toIsoIfMs(v: unknown): unknown {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return v;
+  return new Date(v).toISOString();
+}
+
+function toMsIfIso(v: unknown): unknown {
+  if (typeof v !== 'string') return v;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : v;
+}
+
 export function toServerRow(camel: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(camel)) {
     if (CLIENT_ONLY_FIELDS.has(k)) continue;
-    out[camelToSnake(k)] = v;
+    out[camelToSnake(k)] = TIMESTAMP_FIELDS_CAMEL.has(k) ? toIsoIfMs(v) : v;
   }
   return out;
 }
@@ -39,7 +60,7 @@ export function fromServerRow(
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(snake)) {
     if (whitelist && !whitelist.has(k)) continue;
-    out[snakeToCamel(k)] = v;
+    out[snakeToCamel(k)] = TIMESTAMP_FIELDS_SNAKE.has(k) ? toMsIfIso(v) : v;
   }
   return out;
 }
