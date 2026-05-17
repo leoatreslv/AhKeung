@@ -41,83 +41,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let signedInUserId: string | null = null;
 
-    async function bootstrap(label: string) {
-      console.log(`[auth] bootstrap(${label}) START`);
+    // Establish 'authenticated' for a session and fetch the profile.
+    // Used by both the initial getSession() resolution and the SIGNED_IN
+    // event handler. Does NOT call any other supabase.auth.* methods —
+    // calling them from inside an onAuthStateChange callback can deadlock
+    // the SDK's internal auth lock.
+    async function applySession(session: { user: { id: string; email?: string } }) {
+      if (signedInUserId === session.user.id) return;  // dedupe re-entry
+      signedInUserId = session.user.id;
+      let profile: Profile | null = null;
       try {
+        profile = await fetchProfile(session.user.id);
+        if (profile) localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(profile));
+      } catch {
+        const cached = localStorage.getItem(LAST_PROFILE_KEY);
+        if (cached) {
+          try { profile = JSON.parse(cached) as Profile; }
+          catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
+        }
+      }
+      if (cancelled) return;
+      userIdRef.current = session.user.id;
+      setState({
+        status: 'authenticated',
+        user: { id: session.user.id, email: session.user.email ?? '' },
+        profile,
+        signOut: async () => { await performSignOut(); },
+      });
+    }
+
+    // Initial check: with detectSessionInUrl: true + PKCE, Supabase JS
+    // handles the ?code= exchange internally as part of getSession()'s
+    // initialize. We just await the result. If a session already exists
+    // (persistSession), this resolves immediately. If a fresh exchange is
+    // happening, this resolves once it finishes. If no session, we fall
+    // through to 'unauthenticated' so the Login screen renders.
+    (async () => {
+      try {
+        const { data: { session } } = await getSupabase().auth.getSession();
+        // Clean ?code= from the URL once the exchange is resolved (success
+        // or otherwise) so a hard reload doesn't try to consume it again.
         const url = new URL(window.location.href);
-        const code = url.searchParams.get('code');
-        if (code) {
-          console.log(`[auth] bootstrap(${label}) found ?code= — exchanging`);
-          const { error } = await getSupabase().auth.exchangeCodeForSession(code);
-          if (error) {
-            console.warn(`[auth] bootstrap(${label}) exchangeCodeForSession error:`, error);
-          } else {
-            console.log(`[auth] bootstrap(${label}) exchange OK`);
-          }
+        if (url.searchParams.has('code')) {
           url.searchParams.delete('code');
           window.history.replaceState({}, '', url.pathname + url.search + url.hash);
         }
-
-        console.log(`[auth] bootstrap(${label}) getSession`);
-        const { data: { session } } = await getSupabase().auth.getSession();
-        console.log(`[auth] bootstrap(${label}) session =`, session?.user?.id ?? null);
         if (!session) {
           userIdRef.current = null;
           if (!cancelled) setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
-          console.log(`[auth] bootstrap(${label}) → unauthenticated (cancelled=${cancelled})`);
           return;
         }
-        let profile: Profile | null = null;
-        try {
-          console.log(`[auth] bootstrap(${label}) fetchProfile`);
-          profile = await fetchProfile(session.user.id);
-          console.log(`[auth] bootstrap(${label}) profile =`, profile);
-          if (profile) localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(profile));
-        } catch (e) {
-          console.warn(`[auth] bootstrap(${label}) fetchProfile failed, falling back to cache:`, e);
-          const cached = localStorage.getItem(LAST_PROFILE_KEY);
-          if (cached) {
-            try { profile = JSON.parse(cached) as Profile; }
-            catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
-          }
-        }
-        if (cancelled) {
-          console.log(`[auth] bootstrap(${label}) cancelled before setState — bailing`);
-          return;
-        }
-        userIdRef.current = session.user.id;
-        setState({
-          status: 'authenticated',
-          user: { id: session.user.id, email: session.user.email ?? '' },
-          profile,
-          signOut: async () => { await performSignOut(); },
-        });
-        console.log(`[auth] bootstrap(${label}) → authenticated`);
+        await applySession(session);
       } catch (e) {
-        console.warn(`[auth] bootstrap(${label}) FAILED:`, e);
+        console.warn('[auth] bootstrap failed:', e);
         if (!cancelled) {
           userIdRef.current = null;
           setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
         }
       }
-    }
+    })();
 
-    bootstrap('mount');
-
-    const { data: { subscription } } = getSupabase().auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = getSupabase().auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         // Token expired server-side. We can't drain the queue (no auth) — best
         // effort: stop sync first to avoid a race with the wipe.
         stopSync();
-        await db.delete(); await db.open();
-        localStorage.removeItem(LAST_PROFILE_KEY);
-        userIdRef.current = null;
-        setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
+        signedInUserId = null;
+        (async () => {
+          try { await db.delete(); await db.open(); } catch { /* tolerate */ }
+          localStorage.removeItem(LAST_PROFILE_KEY);
+          userIdRef.current = null;
+          if (!cancelled) setState((s) => ({ ...s, status: 'unauthenticated', user: null, profile: null }));
+        })();
         return;
       }
-      console.log(`[auth] onAuthStateChange event=${event} user=${session?.user?.id ?? null}`);
-      if (event === 'SIGNED_IN' && session) await bootstrap('SIGNED_IN');
+      if (event === 'SIGNED_IN' && session) {
+        // Don't await inside the listener — that re-enters the SDK's lock.
+        // applySession does not call any auth.* methods, so it's safe to
+        // fire and forget here.
+        void applySession(session);
+      }
     });
 
     const onVisible = async () => {
