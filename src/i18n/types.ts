@@ -124,9 +124,6 @@ export interface Translation {
     nameEn: string;
     nameZh: string;
     namePlaceholder: string;
-    translate: string;
-    translating: string;
-    translateError: string;
     muscleGroup: string;
     equipment: string;
     equipmentPlaceholder: string;

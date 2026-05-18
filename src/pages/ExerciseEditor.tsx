@@ -5,7 +5,6 @@ import { db, muscleGroupColor, type MuscleGroup } from '../db';
 import { useI18n } from '../i18n';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
-import { useTranslate } from '../useTranslate';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -16,7 +15,6 @@ export function ExerciseEditor() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const userId = useCurrentUserId();
-  const { translate, loading: translating, error: translateError } = useTranslate();
 
   const existing = useLiveQuery(
     async () => (id ? await db.exercises.get(id) : undefined),
@@ -38,15 +36,6 @@ export function ExerciseEditor() {
     setMuscleGroup(existing.muscleGroup);
     setEquipment(existing.equipment ?? '');
     setInstructions(existing.instructions ?? '');
-  }
-
-  async function onTranslate(direction: 'en→zh' | 'zh→en') {
-    const source = direction === 'en→zh' ? 'en' : 'zh-TW';
-    const target = direction === 'en→zh' ? 'zh-TW' : 'en';
-    const input = direction === 'en→zh' ? nameEn : nameZh;
-    const out = await translate(input, source, target);
-    if (out === null) return;
-    if (direction === 'en→zh') setNameZh(out); else setNameEn(out);
   }
 
   async function save() {
@@ -93,25 +82,24 @@ export function ExerciseEditor() {
 
       {error && <p className="text-rose-400 text-sm">{error}</p>}
 
-      <BilingualNameField
-        label={t.exerciseEditor.nameEn}
-        value={nameEn}
-        onChange={setNameEn}
-        canTranslate={!!nameZh.trim() && !translating}
-        onTranslate={() => onTranslate('zh→en')}
-        translating={translating}
-      />
-      <BilingualNameField
-        label={t.exerciseEditor.nameZh}
-        value={nameZh}
-        onChange={setNameZh}
-        canTranslate={!!nameEn.trim() && !translating}
-        onTranslate={() => onTranslate('en→zh')}
-        translating={translating}
-      />
-      {translateError && (
-        <p className="text-rose-400 text-xs">{t.exerciseEditor.translateError}: {translateError}</p>
-      )}
+      <div>
+        <label className="text-xs text-slate-400 block mb-1">{t.exerciseEditor.nameEn}</label>
+        <input
+          value={nameEn}
+          onChange={(e) => setNameEn(e.target.value)}
+          placeholder={t.exerciseEditor.namePlaceholder}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base"
+        />
+      </div>
+      <div>
+        <label className="text-xs text-slate-400 block mb-1">{t.exerciseEditor.nameZh}</label>
+        <input
+          value={nameZh}
+          onChange={(e) => setNameZh(e.target.value)}
+          placeholder={t.exerciseEditor.namePlaceholder}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base"
+        />
+      </div>
 
       <div>
         <label className="text-xs text-slate-400 block mb-2">{t.exerciseEditor.muscleGroup}</label>
@@ -169,33 +157,3 @@ export function ExerciseEditor() {
   );
 }
 
-function BilingualNameField({
-  label, value, onChange, canTranslate, onTranslate, translating,
-}: {
-  label: string; value: string; onChange: (v: string) => void;
-  canTranslate: boolean; onTranslate: () => void; translating: boolean;
-}) {
-  const { t } = useI18n();
-  return (
-    <div>
-      <label className="text-xs text-slate-400 block mb-1">{label}</label>
-      <div className="flex gap-2">
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={t.exerciseEditor.namePlaceholder}
-          className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base"
-        />
-        <button
-          type="button"
-          onClick={onTranslate}
-          disabled={!canTranslate}
-          className="px-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-sm whitespace-nowrap"
-          title={t.exerciseEditor.translate}
-        >
-          {translating ? t.exerciseEditor.translating : `🌐 ${t.exerciseEditor.translate}`}
-        </button>
-      </div>
-    </div>
-  );
-}
