@@ -39,10 +39,14 @@ const CLIENT_ONLY_FIELDS = new Set(['serverVersion', 'pendingImageBlob']);
 // We convert on the way out (ms → ISO) and back on the way in (ISO → ms) so the
 // Dexie schema stays uniformly number-typed and PostgREST accepts the payloads.
 const TIMESTAMP_FIELDS_CAMEL = new Set([
-  'createdAt', 'updatedAt', 'deletedAt', 'startedAt', 'endedAt', 'addedAt',
+  'createdAt', 'updatedAt', 'deletedAt',
+  'startedAt', 'endedAt', 'addedAt',
+  'designatedAt', 'respondedAt',
 ]);
 const TIMESTAMP_FIELDS_SNAKE = new Set([
-  'created_at', 'updated_at', 'deleted_at', 'started_at', 'ended_at', 'added_at',
+  'created_at', 'updated_at', 'deleted_at',
+  'started_at', 'ended_at', 'added_at',
+  'designated_at', 'responded_at',
 ]);
 
 function toIsoIfMs(v: unknown): unknown {

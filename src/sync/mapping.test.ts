@@ -37,4 +37,35 @@ describe('mapping', () => {
     expect(toServerRow({ id: 'a', updatedAt: '2025-01-01T00:00:00.000Z' }))
       .toEqual({ id: 'a', updated_at: '2025-01-01T00:00:00.000Z' });
   });
+
+  // Regression: trainer_trainees was added in PR 1 with two new
+  // timestamp columns (designated_at, responded_at) but they weren't
+  // in the timestamp-field whitelist. PostgREST then rejected pushes
+  // with "date/time field value out of range" because the epoch-ms
+  // numbers were being sent unconverted. This test guards every
+  // *_at column we have today.
+  it('converts every *_at field used by current tables', () => {
+    const out = toServerRow({
+      id: 'a',
+      createdAt: 1, updatedAt: 2, deletedAt: 3,
+      startedAt: 4, endedAt: 5, addedAt: 6,
+      designatedAt: 7, respondedAt: 8,
+    });
+    for (const [k, v] of Object.entries(out)) {
+      if (k.endsWith('_at')) {
+        expect(typeof v, `${k} should be ISO string`).toBe('string');
+        expect(v as string).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      }
+    }
+  });
+
+  it('inbound *_at conversion covers designated_at + responded_at too', () => {
+    const out = fromServerRow({
+      id: 'a',
+      designated_at: '2025-01-01T00:00:00.000Z',
+      responded_at:  '2025-01-02T00:00:00.000Z',
+    });
+    expect(typeof out.designatedAt).toBe('number');
+    expect(typeof out.respondedAt).toBe('number');
+  });
 });
