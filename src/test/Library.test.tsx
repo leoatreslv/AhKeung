@@ -6,6 +6,8 @@ import { Library } from '../pages/Library';
 import { db } from '../db';
 import { stubAuthenticatedUser } from './authStub';
 
+const UID = 'u-test';
+
 function renderLibrary() {
   return render(
     <MemoryRouter>
@@ -16,27 +18,44 @@ function renderLibrary() {
   );
 }
 
-// PR 1 transitional: useExercises is stubbed to [] until PR 3 wires the
-// new trainer-authored catalogue. These tests assert behaviour against the
-// free-exercise-db fixture and will be replaced in PR 3 with assertions
-// against an in-memory `db.exercises` seed. See W13 in
-// docs/trainer-exercises-plan.md.
-describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
+async function seedExercises() {
+  await db.exercises.bulkPut([
+    {
+      id: 'ex-bench', ownerId: UID,
+      nameEn: 'Bench Press', nameZh: '臥推',
+      muscleGroup: 'chest', equipment: 'barbell', instructions: 'Lie on bench.',
+      imagePath: null, createdAt: 1, updatedAt: 1, serverVersion: null,
+    },
+    {
+      id: 'ex-pull', ownerId: UID,
+      nameEn: 'Pullups', nameZh: '引體向上',
+      muscleGroup: 'back', equipment: 'bodyweight', instructions: 'Hang and pull.',
+      imagePath: null, createdAt: 2, updatedAt: 1, serverVersion: null,
+    },
+    {
+      id: 'ex-squat', ownerId: UID,
+      nameEn: 'Squat', nameZh: '深蹲',
+      muscleGroup: 'legs', equipment: 'barbell', instructions: 'Hips back.',
+      imagePath: null, createdAt: 3, updatedAt: 1, serverVersion: null,
+    },
+  ]);
+}
+
+describe('Library page', () => {
   beforeEach(async () => {
     await db.delete();
     await db.open();
-    stubAuthenticatedUser({ id: 'u-test' });
+    stubAuthenticatedUser({ id: UID });
+    await seedExercises();
   });
 
-  it('shows a loading state then renders the catalog', async () => {
+  it('renders the catalogue from db.exercises', async () => {
     renderLibrary();
-    // Wait for catalog to load
     await waitFor(() => {
-      expect(screen.getByText('Barbell Bench Press - Medium Grip')).toBeInTheDocument();
+      expect(screen.getByText('Bench Press')).toBeInTheDocument();
     });
-    // All fixtures should be visible initially (filter=all)
     expect(screen.getByText('Pullups')).toBeInTheDocument();
-    expect(screen.getByText('Barbell Squat')).toBeInTheDocument();
+    expect(screen.getByText('Squat')).toBeInTheDocument();
   });
 
   it('filters by muscle group', async () => {
@@ -46,11 +65,11 @@ describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
     expect(screen.getByText('Pullups')).toBeInTheDocument();
-    expect(screen.queryByText('Barbell Squat')).not.toBeInTheDocument();
-    expect(screen.queryByText('Plank')).not.toBeInTheDocument();
+    expect(screen.queryByText('Squat')).not.toBeInTheDocument();
+    expect(screen.queryByText('Bench Press')).not.toBeInTheDocument();
   });
 
-  it('matches search query against exercise names', async () => {
+  it('search matches both English and Chinese names', async () => {
     renderLibrary();
     await waitFor(() => screen.getByText('Pullups'));
 
@@ -58,8 +77,15 @@ describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
       target: { value: 'squat' },
     });
 
-    expect(screen.getByText('Barbell Squat')).toBeInTheDocument();
+    expect(screen.getByText('Squat')).toBeInTheDocument();
     expect(screen.queryByText('Pullups')).not.toBeInTheDocument();
+
+    // Chinese substring hits the Chinese name.
+    fireEvent.change(screen.getByPlaceholderText(/Search exercises/i), {
+      target: { value: '引體' },
+    });
+    expect(screen.getByText('Pullups')).toBeInTheDocument();
+    expect(screen.queryByText('Squat')).not.toBeInTheDocument();
   });
 
   it('toggles a favorite when the star is tapped', async () => {
@@ -75,7 +101,6 @@ describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
       expect(favs.length).toBe(1);
     });
 
-    // Tap the now-filled star to remove the favourite.
     const filled = await screen.findByRole('button', { name: /Remove from favourites/i });
     fireEvent.click(filled);
 
@@ -87,11 +112,10 @@ describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
 
   it('expands an exercise to show instructions on tap', async () => {
     renderLibrary();
-    await waitFor(() => screen.getByText('Barbell Squat'));
+    await waitFor(() => screen.getByText('Squat'));
 
-    fireEvent.click(screen.getByText('Barbell Squat'));
+    fireEvent.click(screen.getByText('Squat'));
 
-    expect(screen.getByText(/Step under the bar/)).toBeInTheDocument();
-    expect(screen.getByText(/Stand back up/)).toBeInTheDocument();
+    expect(screen.getByText(/Hips back/)).toBeInTheDocument();
   });
 });

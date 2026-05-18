@@ -26,36 +26,42 @@ function renderRoute(path: string) {
   );
 }
 
+const BENCH_ID = 'ex-bench-uuid';
+
 beforeEach(async () => {
   await db.delete();
   await db.open();
   stubAuthenticatedUser({ id: 'u-test' });
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   vi.spyOn(window, 'alert').mockImplementation(() => {});
+  // Seed a trainer-authored exercise that the picker can pull from.
+  await db.exercises.put({
+    id: BENCH_ID,
+    ownerId: 'u-test',
+    nameEn: 'Bench Press',
+    nameZh: '臥推',
+    muscleGroup: 'chest',
+    equipment: 'barbell',
+    instructions: null,
+    imagePath: null,
+    createdAt: 1,
+    updatedAt: 1,
+    serverVersion: null,
+  });
 });
 
-// PR 1 transitional: this flow picks an exercise from the free-exercise-db
-// catalogue, which is now empty (useExercises stubbed to []). PR 3 will
-// restore the test by seeding db.exercises with an authored exercise and
-// having the picker draw from there. See W13 in the design doc.
-describe.skip('plan → workout flow [PR 1 stub — restored in PR 3]', () => {
-  // Heavy: AuthProvider bootstrap + two MemoryRouter renders + several waitFor polls.
-  // Default 5s vitest timeout is too tight under full-suite parallelism.
+describe('plan → workout flow', () => {
   it('creates a plan, persists it, then runs a workout against it', { timeout: 15000 }, async () => {
     renderRoute('/plans/new');
-    // Wait for AuthProvider's async bootstrap to flip status → 'authenticated'.
-    // The Save Plan button is rendered unconditionally by PlanEditor, but our
-    // putWithSync call inside `save` short-circuits while userId is null,
-    // so wait until useCurrentUserId resolves before interacting.
     await waitFor(() => screen.getByRole('button', { name: /Chest/ }));
 
     fireEvent.change(screen.getByPlaceholderText(/Push\/Pull/), { target: { value: 'Chest Day' } });
     fireEvent.click(screen.getByRole('button', { name: 'Chest' }));
     fireEvent.click(screen.getByRole('button', { name: '+ Add' }));
     await waitFor(() => screen.getByText('Pick an exercise'));
-    fireEvent.click(screen.getByText('Barbell Bench Press - Medium Grip'));
+    await waitFor(() => screen.getByText('Bench Press'));
+    fireEvent.click(screen.getByText('Bench Press'));
 
-    // Save can race with auth bootstrap: poll until the navigation happens.
     fireEvent.click(screen.getByRole('button', { name: /Save Plan/ }));
     await waitFor(async () => {
       const plans = await db.plans.toArray();
@@ -66,16 +72,15 @@ describe.skip('plan → workout flow [PR 1 stub — restored in PR 3]', () => {
     const plans = await db.plans.toArray();
     expect(plans).toHaveLength(1);
     expect(plans[0].name).toBe('Chest Day');
-    expect(typeof plans[0].id).toBe('string');
     expect(plans[0].userId).toBe('u-test');
-    expect(plans[0].exercises[0].exerciseId).toBe('Barbell_Bench_Press_-_Medium_Grip');
+    expect(plans[0].exercises[0].exerciseId).toBe(BENCH_ID);
 
     const queued = await db.syncQueue.toArray();
     expect(queued.some((q) => q.table === 'plans' && q.rowId === plans[0].id)).toBe(true);
 
     const planId = plans[0].id;
     renderRoute(`/workout/${planId}`);
-    await waitFor(() => screen.getByText('Barbell Bench Press - Medium Grip'));
+    await waitFor(() => screen.getByText('Bench Press'));
 
     const doneButtons = screen.getAllByRole('button').filter((b) => b.textContent === '○');
     expect(doneButtons.length).toBeGreaterThanOrEqual(3);

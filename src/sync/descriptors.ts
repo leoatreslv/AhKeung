@@ -29,6 +29,16 @@ export type TableDescriptor = PKShape & {
   ownerClientField: string;
   ownerServerField: string;
 
+  /** How the ownerField relates to the current user.
+   *   - `'self'`: the column value IS the user_id of the owner. The
+   *     writability guard checks `existing.ownerField === currentUserId`
+   *     and mergeRow stamps that column with currentUserId.
+   *   - `'parent'`: the column points at a parent record (e.g.
+   *     bundle_items.bundle_id). The client trusts the call site; RLS
+   *     enforces real ownership via the parent table's policy. The
+   *     writability check is skipped, and mergeRow doesn't overwrite. */
+  ownerKind: 'self' | 'parent';
+
   /** Whether the local user is allowed to mutate this row.
    *   - `'own-only'`: putWithSync/deleteWithSync enforce ownership.
    *   - `'never'`: the table is a read-only cache of rows pulled from the
@@ -125,6 +135,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'userId',
     ownerServerField: 'user_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'owner' },
     serverSecondaryOrderField: 'id',
   },
@@ -137,6 +148,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'userId',
     ownerServerField: 'user_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'owner' },
     serverSecondaryOrderField: 'id',
   },
@@ -149,6 +161,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'userId',
     ownerServerField: 'user_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'owner' },
     serverSecondaryOrderField: 'id',
   },
@@ -161,6 +174,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'userId',
     ownerServerField: 'user_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'owner' },
     serverSecondaryOrderField: 'exercise_id',
   },
@@ -182,6 +196,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'ownerId',
     ownerServerField: 'owner_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'rls-only' },
     serverSecondaryOrderField: 'id',
   },
@@ -195,6 +210,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'ownerId',
     ownerServerField: 'owner_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'rls-only' },
     serverSecondaryOrderField: 'id',
   },
@@ -211,8 +227,12 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     pkKind: 'composite',
     pkClientFields: ['bundleId', 'exerciseId'],
     pkServerFields: ['bundle_id', 'exercise_id'],
-    ownerClientField: 'bundleId',  // no owner column; using PK[0] as a stand-in
+    ownerClientField: 'bundleId',
     ownerServerField: 'bundle_id',
+    // bundle_items has no user_id column; ownership is conferred by the
+    // parent bundle. RLS enforces that real ownership server-side; the
+    // client trusts the bundle-editor call site.
+    ownerKind: 'parent',
     writability: 'own-only',
     pullPredicate: { kind: 'rls-only' },
     serverSecondaryOrderField: 'exercise_id',
@@ -228,6 +248,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'granterId',
     ownerServerField: 'granter_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'rls-only' },
     serverSecondaryOrderField: 'id',
   },
@@ -243,6 +264,7 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     ownerClientField: 'trainerId',
     ownerServerField: 'trainer_id',
     writability: 'own-only',
+    ownerKind: 'self',
     pullPredicate: { kind: 'rls-only' },
     serverSecondaryOrderField: 'trainee_id',
   },

@@ -32,8 +32,7 @@ type Partials = {
 };
 type PartialOf<T extends SyncTableName> = Partials[T];
 
-/** Build the merged row that gets put into Dexie. Each descriptor's
- *  ownerField is overwritten with the supplied userId. */
+/** Build the merged row that gets put into Dexie. */
 function mergeRow(
   d: TableDescriptor,
   partial: Record<string, unknown>,
@@ -41,7 +40,11 @@ function mergeRow(
   userId: string,
 ): Record<string, unknown> {
   const base: Record<string, unknown> = { ...existing, ...partial };
-  base[d.ownerClientField] = userId;
+  // 'self'-owned tables get their owner column stamped with the current user.
+  // 'parent'-owned tables (bundle_items) keep whatever the caller passed.
+  if (d.ownerKind === 'self') {
+    base[d.ownerClientField] = userId;
+  }
   base.updatedAt = Date.now();
   base.serverVersion = (existing?.serverVersion as string | null | undefined) ?? null;
   // favorites needs addedAt fallback (it's part of the row, not a system column)
@@ -60,9 +63,12 @@ async function existingRow(
     return await db.table(d.dexieTable).get(partial[d.pkClientFields[0]] as string) as
       Record<string, unknown> | undefined;
   }
-  // composite — for favorites, the first field is userId from arg, second from partial
+  // composite — first field comes from the partial if present, else the
+  // userId arg (legacy favorites call style where the caller passes only
+  // the second key field).
+  const first = (partial[d.pkClientFields[0]] as string | undefined) ?? userId;
   const second = partial[d.pkClientFields[1]] as string;
-  return await db.table(d.dexieTable).get([userId, second]) as
+  return await db.table(d.dexieTable).get([first, second]) as
     Record<string, unknown> | undefined;
 }
 
@@ -78,14 +84,15 @@ export async function putWithSync<T extends SyncTableName>(
     const row = mergeRow(d, partial as unknown as Record<string, unknown>, existing, userId);
 
     // Writability: shared-in rows (owner !== me) can't be mutated locally.
-    // For PR 0 all four descriptors are 'own-only' AND every row's owner is
-    // already the local user, so this branch is currently unreachable; PR 1
-    // adds tables where this triggers.
-    const existingOwner = existing?.[d.ownerClientField] as string | undefined;
-    if (existing && existingOwner && existingOwner !== userId) {
-      throw new Error(
-        `cannot mutate ${d.dexieTable} row owned by ${existingOwner} as ${userId}`,
-      );
+    // Skip the check for 'parent'-owned tables where the ownerField doesn't
+    // hold a user_id (RLS enforces real ownership on the server).
+    if (d.ownerKind === 'self') {
+      const existingOwner = existing?.[d.ownerClientField] as string | undefined;
+      if (existing && existingOwner && existingOwner !== userId) {
+        throw new Error(
+          `cannot mutate ${d.dexieTable} row owned by ${existingOwner} as ${userId}`,
+        );
+      }
     }
 
     await db.table(d.dexieTable).put(row);
@@ -100,12 +107,11 @@ export async function putWithSync<T extends SyncTableName>(
   });
 }
 
-export async function deleteWithSync(
-  table: Exclude<SyncTableName, 'favorites'>, rowId: string,
-): Promise<void>;
-export async function deleteWithSync(
-  table: 'favorites', userId: string, exerciseId: string,
-): Promise<void>;
+type SingleKeyTable = 'plans' | 'sessions' | 'metrics' | 'exercises' | 'exerciseBundles' | 'shares';
+type CompositeKeyTable = 'favorites' | 'exerciseBundleItems' | 'trainerTrainees';
+
+export async function deleteWithSync(table: SingleKeyTable, rowId: string): Promise<void>;
+export async function deleteWithSync(table: CompositeKeyTable, pkPart1: string, pkPart2: string): Promise<void>;
 export async function deleteWithSync(
   table: SyncTableName, a: string, b?: string,
 ): Promise<void> {
@@ -119,13 +125,17 @@ export async function deleteWithSync(
     const existing = await db.table(d.dexieTable).get(lookupKey as never) as
       Record<string, unknown> | undefined;
 
-    const existingOwner = existing?.[d.ownerClientField] as string | undefined;
-    // For single-PK tables we don't have a userId on the call site, so we
-    // can only enforce the guard for composite (where the caller passed it).
-    if (existing && existingOwner && d.pkKind === 'composite' && existingOwner !== a) {
-      throw new Error(
-        `cannot delete ${d.dexieTable} row owned by ${existingOwner} as ${a}`,
-      );
+    // For composite-PK self-owned tables (favorites), `a` is the userId.
+    // For composite-PK parent-owned tables (bundle_items), `a` is the parent's
+    // id. In both cases, mismatch with the existing owner field would be a bug
+    // upstream; we only flag self-owned ones here.
+    if (d.ownerKind === 'self' && d.pkKind === 'composite') {
+      const existingOwner = existing?.[d.ownerClientField] as string | undefined;
+      if (existing && existingOwner && existingOwner !== a) {
+        throw new Error(
+          `cannot delete ${d.dexieTable} row owned by ${existingOwner} as ${a}`,
+        );
+      }
     }
 
     await db.table(d.dexieTable).delete(lookupKey as never);

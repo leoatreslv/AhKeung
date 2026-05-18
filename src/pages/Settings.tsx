@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getSupabase } from '../supabase';
 import { useAuth } from '../auth/useAuth';
+import { useI18n } from '../i18n';
 
 export function Settings() {
   const { user, profile, signOut } = useAuth();
+  const { t } = useI18n();
   const navigate = useNavigate();
   const [name, setName] = useState(profile?.displayName ?? '');
   const [online, setOnline] = useState(navigator.onLine);
@@ -81,6 +83,28 @@ export function Settings() {
           <p className="text-rose-400 text-xs mt-1">{status}</p>
         )}
       </div>
+      {profile?.isTrainer && (
+        <div className="border-t border-slate-800 pt-4 space-y-2">
+          <p className="text-xs uppercase tracking-wider text-slate-500">Trainer tools</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Link
+              to="/exercises"
+              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl p-3 text-center"
+            >
+              <div className="text-2xl">🏋️</div>
+              <div className="text-sm mt-1">{t.myExercises.title}</div>
+            </Link>
+            <Link
+              to="/bundles"
+              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl p-3 text-center"
+            >
+              <div className="text-2xl">📦</div>
+              <div className="text-sm mt-1">{t.myBundles.title}</div>
+            </Link>
+          </div>
+        </div>
+      )}
+
       <p className="text-sm text-slate-400">Signed in as {user?.email}</p>
       <button
         onClick={async () => { await signOut(); navigate('/'); }}

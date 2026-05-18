@@ -7,6 +7,10 @@ import { Workout } from './pages/Workout';
 import { Library } from './pages/Library';
 import { Metrics } from './pages/Metrics';
 import { Settings } from './pages/Settings';
+import { MyExercises } from './pages/MyExercises';
+import { ExerciseEditor } from './pages/ExerciseEditor';
+import { MyBundles } from './pages/MyBundles';
+import { BundleEditor } from './pages/BundleEditor';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useT } from './i18n';
 import { useAuth } from './auth/useAuth';
@@ -69,6 +73,12 @@ function Shell() {
           <Route path="/library" element={<Library />} />
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/exercises" element={<MyExercises />} />
+          <Route path="/exercises/new" element={<ExerciseEditor />} />
+          <Route path="/exercises/:id" element={<ExerciseEditor />} />
+          <Route path="/bundles" element={<MyBundles />} />
+          <Route path="/bundles/new" element={<BundleEditor />} />
+          <Route path="/bundles/:id" element={<BundleEditor />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>

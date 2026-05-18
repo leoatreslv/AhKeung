@@ -117,4 +117,55 @@ export interface Translation {
     noEntries: string;
     deleteConfirm: string;
   };
+
+  exerciseEditor: {
+    title: string;
+    titleEditing: string;
+    nameEn: string;
+    nameZh: string;
+    namePlaceholder: string;
+    translate: string;
+    translating: string;
+    translateError: string;
+    muscleGroup: string;
+    equipment: string;
+    equipmentPlaceholder: string;
+    instructions: string;
+    instructionsPlaceholder: string;
+    save: string;
+    delete: string;
+    deleteConfirm: string;
+    needsName: string;
+    needsMuscleGroup: string;
+  };
+
+  myExercises: {
+    title: string;
+    newButton: string;
+    empty: string;
+    notATrainerYet: string;
+  };
+
+  bundleEditor: {
+    title: string;
+    titleEditing: string;
+    name: string;
+    namePlaceholder: string;
+    description: string;
+    descriptionPlaceholder: string;
+    exercises: string;
+    noExercises: string;
+    addExercise: string;
+    save: string;
+    delete: string;
+    deleteConfirm: string;
+    needsName: string;
+  };
+
+  myBundles: {
+    title: string;
+    newButton: string;
+    empty: string;
+    exerciseCount: (n: number) => string;
+  };
 }
