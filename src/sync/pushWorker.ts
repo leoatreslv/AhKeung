@@ -61,8 +61,31 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     if ((local as { pendingImageBlob?: Blob }).pendingImageBlob) return;
     const payload = toServerRow(local);
     const res = await getSupabase().from(d.serverTable).insert(payload).select() as
-      { data: { updated_at: string }[] | null; error: { message: string } | null };
-    if (res.error) throw new Error(res.error.message);
+      { data: { updated_at: string }[] | null; error: { message: string; code?: string } | null };
+    if (res.error) {
+      // 23505 = Postgres unique_violation. The row already exists on the
+      // server (likely because a previous delete is stuck in dead-letter
+      // and never landed). Convert this insert into an update with the
+      // server's current updated_at as expectedServerVersion, then replay
+      // through the update branch on the next iteration.
+      if (res.error.code === '23505') {
+        const pullQ = getSupabase().from(d.serverTable).select('updated_at') as unknown as KeyFilterable;
+        const pulled = await applyServerKeyFilter(d, pullQ, entry.rowId) as unknown as
+          { data: { updated_at: string }[] | null };
+        const serverRow = pulled.data?.[0];
+        if (serverRow) {
+          await setLocalServerVersion(d, entry.rowId, serverRow.updated_at);
+          await db.syncQueue.update(entry.seq!, {
+            op: 'update',
+            expectedServerVersion: serverRow.updated_at,
+          });
+          const refreshed = (await db.syncQueue.get(entry.seq!))!;
+          entries.unshift(refreshed);
+          return;
+        }
+      }
+      throw new Error(res.error.message);
+    }
     const inserted = res.data?.[0];
     if (inserted?.updated_at) await setLocalServerVersion(d, entry.rowId, inserted.updated_at);
     await db.syncQueue.delete(entry.seq!);
