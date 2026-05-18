@@ -112,8 +112,7 @@ export function applyServerKeyFilter<Q extends KeyFilterable>(
 }
 
 // ---------------------------------------------------------------------------
-// Registry. The four pre-existing tables; PR 1 will add exercises, bundles,
-// bundle_items, shares, trainer_trainees, plan_exercises.
+// Registry. Pre-existing four tables plus the PR 1 additions.
 // ---------------------------------------------------------------------------
 
 export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
@@ -165,6 +164,92 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     pullPredicate: { kind: 'owner' },
     serverSecondaryOrderField: 'exercise_id',
   },
+
+  // ─── PR 1 additions ─────────────────────────────────────────────────
+
+  // Trainer-authored exercises. Stored locally for both owner and recipients;
+  // mutation guarded by writability='own-only' + ownerField check. The pull
+  // predicate is rls-only because the RLS policy already returns:
+  //   * rows the user owns, AND
+  //   * rows shared in (directly or via bundle).
+  // Adding .eq('owner_id', me) would WRONGLY filter out shared-in rows.
+  exercises: {
+    serverTable: 'exercises',
+    dexieTable: 'exercises',
+    pkKind: 'single',
+    pkClientFields: ['id'],
+    pkServerFields: ['id'],
+    ownerClientField: 'ownerId',
+    ownerServerField: 'owner_id',
+    writability: 'own-only',
+    pullPredicate: { kind: 'rls-only' },
+    serverSecondaryOrderField: 'id',
+  },
+
+  exerciseBundles: {
+    serverTable: 'exercise_bundles',
+    dexieTable: 'exerciseBundles',
+    pkKind: 'single',
+    pkClientFields: ['id'],
+    pkServerFields: ['id'],
+    ownerClientField: 'ownerId',
+    ownerServerField: 'owner_id',
+    writability: 'own-only',
+    pullPredicate: { kind: 'rls-only' },
+    serverSecondaryOrderField: 'id',
+  },
+
+  // Bundle items have no direct owner column — writability is enforced by
+  // the parent bundle's RLS. From the client side, mutations go through the
+  // bundle editor which loads the parent bundle and ensures ownership; we
+  // treat the table as 'own-only' but with no owner field to compare against,
+  // so the guard in putWithSync degenerates to "trust the call site."
+  // The pull predicate is rls-only (recipient of a bundle share also pulls).
+  exerciseBundleItems: {
+    serverTable: 'exercise_bundle_items',
+    dexieTable: 'exerciseBundleItems',
+    pkKind: 'composite',
+    pkClientFields: ['bundleId', 'exerciseId'],
+    pkServerFields: ['bundle_id', 'exercise_id'],
+    ownerClientField: 'bundleId',  // no owner column; using PK[0] as a stand-in
+    ownerServerField: 'bundle_id',
+    writability: 'own-only',
+    pullPredicate: { kind: 'rls-only' },
+    serverSecondaryOrderField: 'exercise_id',
+  },
+
+  // Shares: owner is the granter. Recipient pulls them too (via RLS).
+  shares: {
+    serverTable: 'shares',
+    dexieTable: 'shares',
+    pkKind: 'single',
+    pkClientFields: ['id'],
+    pkServerFields: ['id'],
+    ownerClientField: 'granterId',
+    ownerServerField: 'granter_id',
+    writability: 'own-only',
+    pullPredicate: { kind: 'rls-only' },
+    serverSecondaryOrderField: 'id',
+  },
+
+  // Trainer-trainees: composite PK. Trainer is the owner (inserts +
+  // deletes); trainee may update status. Both can read their own rows.
+  trainerTrainees: {
+    serverTable: 'trainer_trainees',
+    dexieTable: 'trainerTrainees',
+    pkKind: 'composite',
+    pkClientFields: ['trainerId', 'traineeId'],
+    pkServerFields: ['trainer_id', 'trainee_id'],
+    ownerClientField: 'trainerId',
+    ownerServerField: 'trainer_id',
+    writability: 'own-only',
+    pullPredicate: { kind: 'rls-only' },
+    serverSecondaryOrderField: 'trainee_id',
+  },
+
+  // Note: server-side `plan_exercises` (trigger-maintained projection of
+  // plans.exercises for indexable RLS joins) is deliberately not synced to
+  // Dexie — the client already has plans.exercises in canonical shape.
 };
 
 export function descriptorFor(table: SyncTableName): TableDescriptor {

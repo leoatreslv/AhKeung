@@ -17,7 +17,12 @@ function renderLibrary() {
   );
 }
 
-describe('Library page', () => {
+// PR 1 transitional: useExercises is stubbed to [] until PR 3 wires the
+// new trainer-authored catalogue. These tests assert behaviour against the
+// free-exercise-db fixture and will be replaced in PR 3 with assertions
+// against an in-memory `db.exercises` seed. See W13 in
+// docs/trainer-exercises-plan.md.
+describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
   beforeEach(async () => {
     __resetExercisesForTest();
     await db.delete();

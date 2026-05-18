@@ -20,10 +20,15 @@ export function parseFavoriteRowId(rowId: string): { userId: string; exerciseId:
 }
 
 type Partials = {
-  plans:     Partial<import('../db').Plan>           & { id: string };
-  sessions:  Partial<import('../db').WorkoutSession> & { id: string };
-  metrics:   Partial<import('../db').BodyMetric>     & { id: string };
-  favorites: Partial<import('../db').Favorite>       & { exerciseId: string };
+  plans:               Partial<import('../db').Plan>                & { id: string };
+  sessions:            Partial<import('../db').WorkoutSession>      & { id: string };
+  metrics:             Partial<import('../db').BodyMetric>          & { id: string };
+  favorites:           Partial<import('../db').Favorite>            & { exerciseId: string };
+  exercises:           Partial<import('../db').CustomExercise>      & { id: string };
+  exerciseBundles:     Partial<import('../db').ExerciseBundle>      & { id: string };
+  exerciseBundleItems: Partial<import('../db').ExerciseBundleItem>  & { bundleId: string; exerciseId: string };
+  shares:              Partial<import('../db').Share>               & { id: string };
+  trainerTrainees:     Partial<import('../db').TrainerTrainee>      & { trainerId: string; traineeId: string };
 };
 type PartialOf<T extends SyncTableName> = Partials[T];
 

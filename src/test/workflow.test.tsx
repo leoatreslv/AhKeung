@@ -36,7 +36,11 @@ beforeEach(async () => {
   vi.spyOn(window, 'alert').mockImplementation(() => {});
 });
 
-describe('plan → workout flow', () => {
+// PR 1 transitional: this flow picks an exercise from the free-exercise-db
+// catalogue, which is now empty (useExercises stubbed to []). PR 3 will
+// restore the test by seeding db.exercises with an authored exercise and
+// having the picker draw from there. See W13 in the design doc.
+describe.skip('plan → workout flow [PR 1 stub — restored in PR 3]', () => {
   // Heavy: AuthProvider bootstrap + two MemoryRouter renders + several waitFor polls.
   // Default 5s vitest timeout is too tight under full-suite parallelism.
   it('creates a plan, persists it, then runs a workout against it', { timeout: 15000 }, async () => {

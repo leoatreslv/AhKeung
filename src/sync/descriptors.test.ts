@@ -72,10 +72,45 @@ describe('sync descriptors', () => {
     }
   });
 
-  it('all PR 0 tables are own-only and owner-keyed', () => {
-    for (const [name, d] of Object.entries(DESCRIPTORS)) {
-      expect(d.writability, `${name} writability`).toBe('own-only');
-      expect(d.pullPredicate.kind, `${name} pull`).toBe('owner');
+  it('PR 0 tables remain own-only + owner-keyed pull', () => {
+    const pr0: SyncTableName[] = ['plans', 'sessions', 'metrics', 'favorites'];
+    for (const t of pr0) {
+      const d = descriptorFor(t);
+      expect(d.writability, `${t} writability`).toBe('own-only');
+      expect(d.pullPredicate.kind, `${t} pull`).toBe('owner');
     }
+  });
+
+  it('PR 1 owner-table descriptors pull via rls-only (so shared-in rows arrive too)', () => {
+    const sharedIn: SyncTableName[] = ['exercises', 'exerciseBundles'];
+    for (const t of sharedIn) {
+      const d = descriptorFor(t);
+      expect(d.pullPredicate.kind, `${t} pull`).toBe('rls-only');
+      // ownerField is independent of user_id naming
+      expect(d.ownerServerField).toBe('owner_id');
+      expect(d.ownerClientField).toBe('ownerId');
+    }
+  });
+
+  it('shares descriptor uses granter as owner', () => {
+    const d = descriptorFor('shares');
+    expect(d.ownerClientField).toBe('granterId');
+    expect(d.ownerServerField).toBe('granter_id');
+    expect(d.pullPredicate.kind).toBe('rls-only');
+  });
+
+  it('trainerTrainees descriptor: composite PK with trainer as owner', () => {
+    const d = descriptorFor('trainerTrainees');
+    expect(d.pkKind).toBe('composite');
+    expect(d.pkClientFields).toEqual(['trainerId', 'traineeId']);
+    expect(d.pkServerFields).toEqual(['trainer_id', 'trainee_id']);
+    expect(d.ownerClientField).toBe('trainerId');
+  });
+
+  it('exerciseBundleItems descriptor: composite PK, rls-only pull', () => {
+    const d = descriptorFor('exerciseBundleItems');
+    expect(d.pkKind).toBe('composite');
+    expect(d.pkServerFields).toEqual(['bundle_id', 'exercise_id']);
+    expect(d.pullPredicate.kind).toBe('rls-only');
   });
 });

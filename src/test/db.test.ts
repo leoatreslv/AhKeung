@@ -9,20 +9,25 @@ beforeEach(async () => {
 });
 
 describe('Dexie database', () => {
-  it('opens at schema version 4', async () => {
-    expect(db.verno).toBe(4);
+  it('opens at schema version 5', async () => {
+    expect(db.verno).toBe(5);
   });
 
-  it('has the owned tables plus sync support tables', () => {
+  it('has the owned tables, share tables, and sync support tables', () => {
     const names = db.tables.map((t) => t.name).sort();
     expect(names).toEqual([
+      'exerciseBundleItems',
+      'exerciseBundles',
+      'exercises',
       'favorites',
       'metrics',
       'plans',
       'sessions',
+      'shares',
       'syncDeadLetter',
       'syncMeta',
       'syncQueue',
+      'trainerTrainees',
     ]);
   });
 

@@ -3,13 +3,26 @@
 // silently so server schema additions don't crash the client.
 const INBOUND_FIELDS: Record<string, Set<string>> = {
   plans:     new Set(['id', 'user_id', 'assigned_by', 'name', 'week_start', 'focus',
-                      'exercises', 'created_at', 'updated_at', 'deleted_at']),
+                      'exercises', 'created_at', 'updated_at', 'deleted_at', 'superseded_by']),
   sessions:  new Set(['id', 'user_id', 'plan_id', 'date', 'exercises', 'notes',
                       'started_at', 'ended_at', 'updated_at', 'deleted_at']),
   metrics:   new Set(['id', 'user_id', 'date', 'weight_kg', 'height_cm',
                       'body_fat_pct', 'notes', 'updated_at', 'deleted_at']),
   favorites: new Set(['user_id', 'exercise_id', 'added_at', 'updated_at', 'deleted_at']),
   profiles:  new Set(['id', 'display_name', 'is_trainer', 'created_at']),
+
+  // Keys are the *client* (camelCase Dexie) table names — matches the
+  // argument pullWorker passes to fromServerRow().
+  exercises: new Set(['id', 'owner_id', 'name_en', 'name_zh', 'muscle_group',
+                      'equipment', 'instructions', 'image_path',
+                      'created_at', 'updated_at', 'deleted_at']),
+  exerciseBundles: new Set(['id', 'owner_id', 'name', 'description',
+                            'created_at', 'updated_at', 'deleted_at']),
+  exerciseBundleItems: new Set(['bundle_id', 'exercise_id', 'position', 'updated_at']),
+  shares: new Set(['id', 'granter_id', 'recipient_id', 'resource_type', 'resource_id',
+                   'created_at', 'updated_at', 'deleted_at']),
+  trainerTrainees: new Set(['trainer_id', 'trainee_id', 'status',
+                            'designated_at', 'responded_at', 'updated_at']),
 };
 
 function snakeToCamel(s: string): string {

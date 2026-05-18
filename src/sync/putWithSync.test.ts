@@ -68,12 +68,53 @@ describe('putWithSync', () => {
     expect(parseFavoriteRowId(favoriteRowId('u', 'ex'))).toEqual({ userId: 'u', exerciseId: 'ex' });
   });
 
-  // Note on writability: every PR 0 descriptor has ownerField === userId
-  // (or, for favorites, the composite key includes userId), so the
-  // "row owned by someone else" guard inside putWithSync/deleteWithSync
-  // is structurally unreachable today. The guard exists for PR 1, where
-  // tables like `exercises` have ownerId independent of the PK and we
-  // need to refuse mutations on shared-in rows. The descriptor unit test
-  // covers the encoding side; an integration test for the guard ships
-  // with PR 1.
+  it('refuses to mutate an exercise owned by another user (S5 guard)', async () => {
+    // Seed an exercise owned by 'trainer-x' as if it had arrived via pull.
+    await db.exercises.put({
+      id: 'ex-1',
+      ownerId: 'trainer-x',
+      nameEn: 'Bench Press',
+      nameZh: null,
+      muscleGroup: 'chest',
+      equipment: 'barbell',
+      instructions: null,
+      imagePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      serverVersion: 'srv-v1',
+    });
+
+    // A different user (a trainee viewing the shared exercise) tries to edit it.
+    await expect(
+      putWithSync('exercises', { id: 'ex-1', nameEn: 'Hacked!' }, 'trainee-y'),
+    ).rejects.toThrow(/cannot mutate/);
+
+    // Server version stays untouched; no syncQueue entry was enqueued.
+    const row = await db.exercises.get('ex-1');
+    expect(row?.nameEn).toBe('Bench Press');
+    expect(row?.ownerId).toBe('trainer-x');
+    expect(await db.syncQueue.count()).toBe(0);
+  });
+
+  it('owner can still edit their own exercise', async () => {
+    await db.exercises.put({
+      id: 'ex-2',
+      ownerId: 'trainer-x',
+      nameEn: 'Squat',
+      nameZh: null,
+      muscleGroup: 'legs',
+      equipment: 'barbell',
+      instructions: null,
+      imagePath: null,
+      createdAt: 1,
+      updatedAt: 1,
+      serverVersion: 'srv-v1',
+    });
+
+    await putWithSync('exercises', { id: 'ex-2', nameEn: 'Back Squat' }, 'trainer-x');
+
+    const row = await db.exercises.get('ex-2');
+    expect(row?.nameEn).toBe('Back Squat');
+    expect(await db.syncQueue.count()).toBe(1);
+  });
 });

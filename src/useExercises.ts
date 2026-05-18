@@ -1,29 +1,19 @@
-import { useEffect, useState } from 'react';
-import { loadExercises, type ExerciseMeta } from './exercises';
+import { type ExerciseMeta } from './exercises';
 
-let shared: ExerciseMeta[] | null = null;
-const listeners = new Set<(list: ExerciseMeta[]) => void>();
-
-loadExercises().then((list) => {
-  shared = list;
-  listeners.forEach((l) => l(list));
-});
+// PR 1 stub. The free-exercise-db catalogue is being removed (PR 2) and
+// replaced with trainer-authored exercises (PR 3). Between PR 1 and PR 3
+// the picker and library render an empty state — documented in the
+// trainer-exercises plan as the W13 transitional window.
+//
+// Once PR 3 lands, useExercises (or its successor useCustomExercises /
+// useSharedExercises) will live-query db.exercises and adapt the row
+// shape to the call sites that still consume ExerciseMeta.
 
 export function useExercises(): ExerciseMeta[] | null {
-  const [list, setList] = useState<ExerciseMeta[] | null>(shared);
-  useEffect(() => {
-    if (shared) return;
-    const l = (next: ExerciseMeta[]) => setList(next);
-    listeners.add(l);
-    return () => {
-      listeners.delete(l);
-    };
-  }, []);
-  return list;
+  return [];
 }
 
-export function useExercise(id: string | undefined): ExerciseMeta | undefined {
-  const all = useExercises();
-  if (!all || !id) return undefined;
-  return all.find((e) => e.id === id);
+export function useExercise(_id: string | undefined): ExerciseMeta | undefined {
+  void _id;
+  return undefined;
 }

@@ -646,22 +646,22 @@ easiest to revert.
 
 | Finding | Status | Where addressed |
 |---|---|---|
-| B1 | **Resolved** | Dropped the jsonb containment branch. Plan-share now emits explicit `shares` rows for each referenced exercise (Sharing semantics), so `exercises_read` only checks direct + bundle shares. |
-| B2 | **Resolved** | `plan_exercises` normalized join table added with `(exercise_id)` index; `shares` indexed on `(recipient_id, resource_type, resource_id)`; `exercise_bundle_items` indexed on `(exercise_id)`. (Data model section.) |
-| B3 | **Resolved in PR 0** | Sync layer refactor introduces per-table descriptors with `pullPredicate` and `writability`. `pullWorker.ts` and `putWithSync.ts` consume them; no more hard-coded `user_id`. |
-| B4 | **Resolved in PR 0** | Same descriptor model: composite PKs, non-`user_id` owner columns, and "store rows owned by others" are all expressible. |
-| S5 | **Resolved in PR 0** | `writability: 'own-only'` check guards `putWithSync`/`deleteWithSync`. Shared-in rows return early without enqueuing. |
-| S6 | **Resolved** | `share_plan` RPC emits exercise shares atomically with the plan clone. Trainer soft-deletes (FK `on delete restrict` blocks hard delete) → trainee loses access on next pull. |
-| S7 | **Resolved** | `plans.superseded_by` column added; assigned-plans card filters to `superseded_by IS NULL` for "current," shows older as collapsed history. |
-| S8 | **Resolved** | `shares` gains `updated_at` + `touch_updated_at` trigger; participates in OCC like every other synced table. |
-| S9 | **Resolved** | `trainer_trainees.status` added; share-visibility policies gated on `accepted`. Trainee-side accept/decline banner on Home, "Block this trainer" affordance on Settings. |
-| S10 | **Resolved** | Google Translate moved into Supabase Edge Function `translate-name`. Client invokes via `supabase.functions.invoke`; key never ships to the bundle. |
-| S11 | **Resolved** | `exercises.name_en` and `name_zh` are nullable with a CHECK that at least one is non-null. UI falls back at display time. |
-| W12 | **Resolved** | PWA runtime cache rule repointed at the Supabase Storage `exercise-images` origin. (Code removal section.) |
-| W13 | **Accepted, documented** | PR 1 description will state explicitly: "pickers render empty state between PR 1 and PR 3." |
-| W14 | **Resolved in PR 4** | `pendingImageBlob` Dexie column + pre-push upload sweep. Specified in the PR 4 description. |
-| W15 | **Resolved** | RLS denial tests, share-revoke tests, and `trainer_trainees` denial tests added to the test plan. |
+| B1 | **Landed in PR 1** | Migration `0002_custom_exercises.sql`: `exercises_read` has no jsonb-containment branch; plan-share emits explicit exercise share rows via the `share_plan` RPC. |
+| B2 | **Landed in PR 1** | Migration `0002`: `plan_exercises` join table populated by `sync_plan_exercises` trigger on `plans` writes, indexed on `exercise_id`. `shares` indexed `(recipient_id, resource_type, resource_id)`. `exercise_bundle_items` indexed on `exercise_id`. |
+| B3 | **Landed in PR 0** | Per-table descriptors with `pullPredicate` (`owner` / `recipient` / `rls-only`). PR 1 uses `rls-only` for exercises/bundles/shares/trainer_trainees so the pull worker fetches both owned and shared-in rows. |
+| B4 | **Landed in PR 0** | Descriptor model handles composite PKs (`exerciseBundleItems`, `trainerTrainees`, `favorites`) and non-`user_id` owner columns (`ownerId` for exercises/bundles, `granterId` for shares, `trainerId` for trainer_trainees). |
+| S5 | **Landed in PR 1** | Cross-user mutation guard in `putWithSync` now exercises a real path: `putWithSync('exercises', ..., 'trainee-y')` against a row whose `ownerId='trainer-x'` rejects with a clear error and leaves the sync queue empty. Regression test in `putWithSync.test.ts`. |
+| S6 | **Landed in PR 1** | `share_plan` RPC clones the plan + emits exercise share rows atomically with `on conflict do nothing` (idempotent). `exercises.exercise_id ← on delete restrict` from `favorites` and `plan_exercises` blocks hard-delete; trainer must soft-delete (set `deleted_at`), and the next trainee pull removes the row. |
+| S7 | **Landed in PR 1** | `plans` gained `superseded_by uuid references plans(id) on delete set null`. The `share_plan` RPC stamps the previous current assignment from the same trainer when re-sharing. Dexie schema indexes `supersededBy` for the assigned-plans-card live query. |
+| S8 | **Landed in PR 1** | `shares` has `updated_at` + `deleted_at` + the `shares_touch` `touch_updated_at` trigger. Participates in OCC via the existing push worker code path with no special-casing. |
+| S9 | **Landed in PR 1** | `trainer_trainees.status text default 'pending' check (status in ('pending','accepted','declined'))`. New `has_accepted_designation(trainer, trainee)` SECURITY DEFINER function gates the exercise and bundle read policies. Trainee-side `trainer_trainees_trainee_respond` RLS policy lets the trainee update status; trainer-side `trainer_trainees_insert` policy enforces `trainer_id = auth.uid()`. |
+| S10 | **Scheduled PR 3** | Edge function spec in design doc; implementation lands with the translate-button UI. |
+| S11 | **Landed in PR 1** | `exercises.name_en` and `name_zh` are nullable with `check (coalesce(name_en, name_zh) is not null)`. Dexie's `CustomExercise` interface types both as `string \| null`. Display-time fallback is the responsibility of the UI in PR 3. |
+| W12 | **Scheduled PR 2** | Replaces the jsdelivr cache rule with a Supabase Storage rule. |
+| W13 | **Landed in PR 1** | The transitional empty-picker state is in effect: `useExercises()` stubbed to `[]`. Library and workflow tests skipped via `describe.skip(...[PR 1 stub — restored in PR 3])` with explicit notes pointing at this finding. Pickers render the "no exercises match" empty state. |
+| W14 | **Scheduled PR 4** | `pendingImageBlob` Dexie column + pre-push upload sweep. |
+| W15 | **Partially landed in PR 1** | Client-side: descriptor unit tests for the new tables; S5-guard regression test for cross-user write rejection. Full server-side RLS denial tests (pgTAP / supabase test harness) deferred to PR 5 when the share UX is wired and integration coverage is meaningful. |
 | W16 | **Accepted, noted as risk** | Flagged in Risks/open item 1; revisit when trainer pool grows. |
-| O17 | **Deferred** | Out of scope for this work; tracked as a pre-launch hardening task. The plan notes the dependency. |
-| O18 | **Resolved** | `deleted_at` added to every new mutable table; pull worker already honours soft-delete tombstones. |
-| O19 | **Resolved** | PR 3 split into PR 3 (editor + translate) and PR 4 (image upload + camera). PR sequence is now 7 PRs, not 5. |
+| O17 | **Deferred** | Out of scope for this work; tracked as a pre-launch hardening task. |
+| O18 | **Landed in PR 1** | Every new mutable table (`exercises`, `exercise_bundles`, `shares`) has `deleted_at`; pull worker already honours soft-delete tombstones. `exercise_bundle_items` and `trainer_trainees` are hard-deleted by design (status flips for trainer_trainees; bundle items are re-derived by trainer-side bundle editor). |
+| O19 | **Resolved** | PR 3 split into PR 3 (editor + translate) and PR 4 (image upload + camera). PR sequence is now 7 PRs. |
