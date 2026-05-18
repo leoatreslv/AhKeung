@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { muscleGroupColor, type MuscleGroup } from '../db';
-import { useT } from '../i18n';
+import { useI18n } from '../i18n';
 import { useExercises } from '../useExercises';
-import { imageUrl } from '../exercises';
+import { displayName, imageUrl } from '../exerciseDisplay';
 import { useFavoriteIds, toggleFavorite } from '../useFavorites';
 
 const GROUPS: (MuscleGroup | 'all')[] = [
@@ -10,7 +10,7 @@ const GROUPS: (MuscleGroup | 'all')[] = [
 ];
 
 export function Library() {
-  const t = useT();
+  const { t, locale } = useI18n();
   const all = useExercises();
   const favorites = useFavoriteIds();
   const [filter, setFilter] = useState<MuscleGroup | 'all'>('all');
@@ -21,12 +21,13 @@ export function Library() {
     return <div className="p-4 text-slate-400">{t.common.loading}</div>;
   }
 
+  const q = search.toLowerCase();
   const list = all.filter((e) => {
     if (filter !== 'all' && e.muscleGroup !== filter) return false;
     if (search === '') return true;
-    const local = t.exerciseName[e.id] ?? e.name;
-    const q = search.toLowerCase();
-    return local.toLowerCase().includes(q) || e.name.toLowerCase().includes(q);
+    const en = (e.nameEn ?? '').toLowerCase();
+    const zh = (e.nameZh ?? '').toLowerCase();
+    return en.includes(q) || zh.includes(q);
   });
 
   return (
@@ -60,9 +61,10 @@ export function Library() {
 
       <ul className="space-y-2">
         {list.map((ex) => {
-          const name = t.exerciseName[ex.id] ?? ex.name;
+          const name = displayName(ex, locale);
           const isOpen = openId === ex.id;
           const isFav = favorites.has(ex.id);
+          const img = imageUrl(ex.imagePath);
           return (
             <li key={ex.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
               <div className="flex items-stretch">
@@ -70,9 +72,9 @@ export function Library() {
                   onClick={() => setOpenId(isOpen ? null : ex.id)}
                   className="flex-1 min-w-0 text-left p-3 flex items-center gap-3"
                 >
-                  {ex.images[0] ? (
+                  {img ? (
                     <img
-                      src={imageUrl(ex.images[0])}
+                      src={img}
                       alt=""
                       loading="lazy"
                       className="w-14 h-14 rounded-lg object-cover bg-slate-700 shrink-0"
@@ -82,7 +84,9 @@ export function Library() {
                   )}
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">{name}</div>
-                    <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
+                    {ex.equipment && (
+                      <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
+                    )}
                   </div>
                   <span className={`${muscleGroupColor[ex.muscleGroup]} text-white text-[10px] px-2 py-0.5 rounded-full shrink-0`}>
                     {t.muscleGroup[ex.muscleGroup]}
@@ -101,45 +105,18 @@ export function Library() {
               </div>
               {isOpen && (
                 <div className="px-3 pb-3 border-t border-slate-700 pt-2 text-sm text-slate-300 space-y-3">
-                  {ex.images.length > 0 && (
-                    <div className="flex gap-2 overflow-x-auto -mx-3 px-3">
-                      {ex.images.map((img) => (
-                        <img
-                          key={img}
-                          src={imageUrl(img)}
-                          alt=""
-                          loading="lazy"
-                          className="h-40 rounded-lg bg-slate-700"
-                        />
-                      ))}
-                    </div>
+                  {img && (
+                    <img
+                      src={img}
+                      alt=""
+                      loading="lazy"
+                      className="w-full max-h-60 object-contain rounded-lg bg-slate-700"
+                    />
                   )}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    {ex.level && (
-                      <div>
-                        <div className="text-slate-400">{t.library.level}</div>
-                        <div className="capitalize">{ex.level}</div>
-                      </div>
-                    )}
-                    <div>
-                      <div className="text-slate-400">{t.library.primaryMuscles}</div>
-                      <div className="capitalize">{ex.primaryMuscles.join(', ')}</div>
-                    </div>
-                    {ex.secondaryMuscles.length > 0 && (
-                      <div className="col-span-2">
-                        <div className="text-slate-400">{t.library.secondaryMuscles}</div>
-                        <div className="capitalize">{ex.secondaryMuscles.join(', ')}</div>
-                      </div>
-                    )}
-                  </div>
-                  {ex.instructions.length > 0 && (
+                  {ex.instructions && (
                     <div>
                       <div className="text-slate-400 text-xs mb-1">{t.library.instructions}</div>
-                      <ol className="list-decimal list-inside space-y-1 text-sm">
-                        {ex.instructions.map((step, i) => (
-                          <li key={i}>{step}</li>
-                        ))}
-                      </ol>
+                      <p className="whitespace-pre-wrap text-sm">{ex.instructions}</p>
                     </div>
                   )}
                 </div>

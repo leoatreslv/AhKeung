@@ -3,7 +3,6 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { I18nProvider } from '../i18n';
 import { Library } from '../pages/Library';
-import { __resetExercisesForTest } from '../exercises';
 import { db } from '../db';
 import { stubAuthenticatedUser } from './authStub';
 
@@ -24,7 +23,6 @@ function renderLibrary() {
 // docs/trainer-exercises-plan.md.
 describe.skip('Library page [PR 1 stub — restored in PR 3]', () => {
   beforeEach(async () => {
-    __resetExercisesForTest();
     await db.delete();
     await db.open();
     stubAuthenticatedUser({ id: 'u-test' });

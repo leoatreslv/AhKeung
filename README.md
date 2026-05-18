@@ -59,23 +59,18 @@ tests live in `src/test/` and cover:
 | File | Surface |
 |---|---|
 | `utils.test.ts` | `todayISO`, `weekStartISO`, `formatDate`, `formatDuration` |
-| `exercises.test.ts` | catalog loading + muscle-group classification + `imageUrl` |
 | `db.test.ts` | Dexie schema version, indexes, CRUD on plans/sessions/metrics |
+| `descriptors.test.ts` | per-table sync descriptors (PK encoding, owner column, pull predicate) |
 | `i18n.test.tsx` | locale detection, switching, persistence, every muscle-group key present |
-| `Library.test.tsx` | filter by muscle group, search, expand to view instructions |
-| `workflow.test.tsx` | end-to-end: build a plan → start a workout → log a set → finish → assert persistence |
-
-The test setup stubs `fetch` to serve a tiny in-memory fixture
-(`src/test/fixtures.ts`) instead of the full ~1 MB
-`exercises.json`, so tests run in under a few seconds.
+| `workflow.test.tsx` | end-to-end plan → workout flow (currently skipped — restored in PR 3 of trainer-exercises) |
 
 ## Project structure
 
 ```
 src/
 ├── App.tsx            # router + bottom tab bar
-├── db.ts              # Dexie schema (plans / sessions / metrics)
-├── exercises.ts       # bundled exercise catalog
+├── db.ts              # Dexie schema (plans/sessions/metrics + sync support tables)
+├── exerciseDisplay.ts # imageUrl + locale-aware displayName helpers
 ├── utils.ts           # date helpers
 └── pages/
     ├── Home.tsx       # this-week plan, recent sessions, quick actions

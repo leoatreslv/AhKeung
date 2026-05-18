@@ -120,6 +120,4 @@ export const en: Translation = {
     noEntries: 'No entries yet.',
     deleteConfirm: 'Delete this entry?',
   },
-
-  exerciseName: {},
 };

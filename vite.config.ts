@@ -16,6 +16,13 @@ export default defineConfig(({ mode }) => {
     ? new RegExp(`^${escapeRegex(supabaseOrigin)}/`)
     : /a^/;  // matches nothing when no Supabase URL is configured
 
+  // Exercise images live in the public Storage bucket; safe to cache
+  // aggressively. More-specific pattern goes before the catch-all NetworkOnly
+  // rule below so Workbox matches it first.
+  const exerciseImagesPattern = supabaseOrigin
+    ? new RegExp(`^${escapeRegex(supabaseOrigin)}/storage/v1/object/public/exercise-images/`)
+    : /a^/;
+
   return {
     plugins: [
       react(),
@@ -42,17 +49,21 @@ export default defineConfig(({ mode }) => {
           maximumFileSizeToCacheInBytes: 2 * 1024 * 1024,
           runtimeCaching: [
             {
-              // Never serve cached Supabase responses to the sync worker.
-              urlPattern: supabaseUrlPattern,
-              handler: 'NetworkOnly',
-            },
-            {
-              urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/gh\/yuhonas\/free-exercise-db/,
+              // Exercise images served from Supabase Storage. CacheFirst with
+              // long expiry — file names are content-addressed (uuid.jpg) so
+              // cache invalidation isn't a concern.
+              urlPattern: exerciseImagesPattern,
               handler: 'CacheFirst',
               options: {
                 cacheName: 'exercise-images',
                 expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 60 },
               },
+            },
+            {
+              // Everything else on the Supabase origin (PostgREST, auth,
+              // realtime) — never serve cached responses.
+              urlPattern: supabaseUrlPattern,
+              handler: 'NetworkOnly',
             },
           ],
         },

@@ -1,19 +1,24 @@
-import { type ExerciseMeta } from './exercises';
-
-// PR 1 stub. The free-exercise-db catalogue is being removed (PR 2) and
-// replaced with trainer-authored exercises (PR 3). Between PR 1 and PR 3
-// the picker and library render an empty state — documented in the
-// trainer-exercises plan as the W13 transitional window.
+// Live query over the trainer-authored exercise catalogue. Returns every
+// row the current user can read — owner rows plus shared-in rows the
+// server's RLS exercises_read policy allows through. The picker filters
+// further (favourites, muscle group, search).
 //
-// Once PR 3 lands, useExercises (or its successor useCustomExercises /
-// useSharedExercises) will live-query db.exercises and adapt the row
-// shape to the call sites that still consume ExerciseMeta.
+// PR 1 stubbed this to []. PR 2 wires it to Dexie. PR 3 populates
+// db.exercises through the new exercise editor.
 
-export function useExercises(): ExerciseMeta[] | null {
-  return [];
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db, type CustomExercise } from './db';
+
+export function useExercises(): CustomExercise[] | null {
+  const list = useLiveQuery(
+    () => db.exercises.filter((e) => !e.deletedAt).toArray(),
+    [],
+  );
+  return list ?? null;
 }
 
-export function useExercise(_id: string | undefined): ExerciseMeta | undefined {
-  void _id;
-  return undefined;
+export function useExercise(id: string | undefined): CustomExercise | undefined {
+  const list = useExercises();
+  if (!list || !id) return undefined;
+  return list.find((e) => e.id === id);
 }

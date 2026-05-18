@@ -6,7 +6,6 @@ import { AuthProvider } from '../auth/AuthProvider';
 import { PlanEditor } from '../pages/PlanEditor';
 import { Workout } from '../pages/Workout';
 import { db } from '../db';
-import { __resetExercisesForTest } from '../exercises';
 import { stubAuthenticatedUser } from './authStub';
 
 function renderRoute(path: string) {
@@ -28,7 +27,6 @@ function renderRoute(path: string) {
 }
 
 beforeEach(async () => {
-  __resetExercisesForTest();
   await db.delete();
   await db.open();
   stubAuthenticatedUser({ id: 'u-test' });

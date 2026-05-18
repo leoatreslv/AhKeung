@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type SetLog, type WorkoutSession } from '../db';
-import { imageUrl, type ExerciseMeta } from '../exercises';
+import { db, type CustomExercise, type SetLog, type WorkoutSession } from '../db';
+import { displayName, imageUrl } from '../exerciseDisplay';
 import { useExercises } from '../useExercises';
 import { todayISO, formatDuration } from '../utils';
-import { useT } from '../i18n';
+import { useI18n } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
 import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { putWithSync } from '../sync/putWithSync';
 
 export function Workout() {
-  const t = useT();
+  const { t, locale } = useI18n();
   const { planId } = useParams<{ planId?: string }>();
   const navigate = useNavigate();
   const catalog = useExercises();
@@ -27,7 +27,7 @@ export function Workout() {
   const userId = useCurrentUserId();
   const [elapsed, setElapsed] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [detailsFor, setDetailsFor] = useState<ExerciseMeta | null>(null);
+  const [detailsFor, setDetailsFor] = useState<CustomExercise | null>(null);
   const [startedAt] = useState(() => Date.now());
   const [date] = useState(() => todayISO());
 
@@ -144,18 +144,19 @@ export function Workout() {
       <ul className="space-y-3">
         {session.exercises.map((ex, exIdx) => {
           const meta = findEx(ex.exerciseId);
-          const name = meta ? (t.exerciseName[meta.id] ?? meta.name) : ex.exerciseId;
+          const name = meta ? displayName(meta, locale) : ex.exerciseId;
+          const img = meta ? imageUrl(meta.imagePath) : null;
           return (
             <li key={ex.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
               <div className="p-3 flex items-center gap-2 border-b border-slate-700">
-                {meta?.images[0] ? (
-                  <img src={imageUrl(meta.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+                {img ? (
+                  <img src={img} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
                 ) : (
                   <div className="w-10 h-10 rounded bg-slate-700" />
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-sm truncate">{name}</div>
-                  {meta && <div className="text-xs text-slate-400 truncate capitalize">{meta.equipment}</div>}
+                  {meta?.equipment && <div className="text-xs text-slate-400 truncate capitalize">{meta.equipment}</div>}
                 </div>
                 {meta && (
                   <button
@@ -249,22 +250,23 @@ export function Workout() {
                 const favs = available.filter((e) => favorites.has(e.id));
                 const rest = available.filter((e) => !favorites.has(e.id));
                 const row = (ex: typeof available[number]) => {
-                  const name = t.exerciseName[ex.id] ?? ex.name;
+                  const name = displayName(ex, locale);
                   const isFav = favorites.has(ex.id);
+                  const img = imageUrl(ex.imagePath);
                   return (
                     <li key={ex.id} className="flex items-stretch border-b border-slate-800 hover:bg-slate-800">
                       <button
                         onClick={() => addExercise(ex.id)}
                         className="flex-1 min-w-0 text-left px-4 py-3 flex items-center gap-3"
                       >
-                        {ex.images[0] ? (
-                          <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+                        {img ? (
+                          <img src={img} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
                         ) : (
                           <div className="w-10 h-10 rounded bg-slate-700" />
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm truncate">{name}</div>
-                          <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>
+                          {ex.equipment && <div className="text-xs text-slate-400 truncate capitalize">{ex.equipment}</div>}
                         </div>
                         {isFav && <span className="text-amber-400 text-sm shrink-0">★</span>}
                       </button>

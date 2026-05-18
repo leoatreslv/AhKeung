@@ -117,10 +117,4 @@ export interface Translation {
     noEntries: string;
     deleteConfirm: string;
   };
-
-  /**
-   * Sparse overlay: free-exercise-db IDs → localized name.
-   * If absent, fall back to the English name from the data file.
-   */
-  exerciseName: Record<string, string>;
 }

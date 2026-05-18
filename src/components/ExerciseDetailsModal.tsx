@@ -1,16 +1,17 @@
-import { muscleGroupColor } from '../db';
-import { imageUrl, type ExerciseMeta } from '../exercises';
-import { useT } from '../i18n';
+import { muscleGroupColor, type CustomExercise } from '../db';
+import { displayName, imageUrl } from '../exerciseDisplay';
+import { useI18n } from '../i18n';
 
 export function ExerciseDetailsModal({
   exercise,
   onClose,
 }: {
-  exercise: ExerciseMeta;
+  exercise: CustomExercise;
   onClose: () => void;
 }) {
-  const t = useT();
-  const name = t.exerciseName[exercise.id] ?? exercise.name;
+  const { t, locale } = useI18n();
+  const name = displayName(exercise, locale);
+  const img = imageUrl(exercise.imagePath);
 
   return (
     <div
@@ -28,7 +29,9 @@ export function ExerciseDetailsModal({
               <span className={`${muscleGroupColor[exercise.muscleGroup]} text-white text-[10px] px-2 py-0.5 rounded-full`}>
                 {t.muscleGroup[exercise.muscleGroup]}
               </span>
-              <span className="text-xs text-slate-400 capitalize truncate">{exercise.equipment}</span>
+              {exercise.equipment && (
+                <span className="text-xs text-slate-400 capitalize truncate">{exercise.equipment}</span>
+              )}
             </div>
           </div>
           <button
@@ -41,47 +44,19 @@ export function ExerciseDetailsModal({
         </div>
 
         <div className="overflow-y-auto flex-1 p-3 space-y-3 text-sm text-slate-300">
-          {exercise.images.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto -mx-3 px-3">
-              {exercise.images.map((img) => (
-                <img
-                  key={img}
-                  src={imageUrl(img)}
-                  alt=""
-                  loading="lazy"
-                  className="h-40 rounded-lg bg-slate-700"
-                />
-              ))}
-            </div>
+          {img && (
+            <img
+              src={img}
+              alt=""
+              loading="lazy"
+              className="w-full max-h-72 object-contain rounded-lg bg-slate-700"
+            />
           )}
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            {exercise.level && (
-              <div>
-                <div className="text-slate-400">{t.library.level}</div>
-                <div className="capitalize">{exercise.level}</div>
-              </div>
-            )}
-            <div>
-              <div className="text-slate-400">{t.library.primaryMuscles}</div>
-              <div className="capitalize">{exercise.primaryMuscles.join(', ')}</div>
-            </div>
-            {exercise.secondaryMuscles.length > 0 && (
-              <div className="col-span-2">
-                <div className="text-slate-400">{t.library.secondaryMuscles}</div>
-                <div className="capitalize">{exercise.secondaryMuscles.join(', ')}</div>
-              </div>
-            )}
-          </div>
-
-          {exercise.instructions.length > 0 && (
+          {exercise.instructions && (
             <div>
               <div className="text-slate-400 text-xs mb-1">{t.library.instructions}</div>
-              <ol className="list-decimal list-inside space-y-1">
-                {exercise.instructions.map((step, i) => (
-                  <li key={i}>{step}</li>
-                ))}
-              </ol>
+              <p className="whitespace-pre-wrap">{exercise.instructions}</p>
             </div>
           )}
         </div>

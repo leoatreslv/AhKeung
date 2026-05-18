@@ -4,13 +4,14 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   db,
   muscleGroupColor,
+  type CustomExercise,
   type MuscleGroup,
   type PlanExercise,
 } from '../db';
-import { imageUrl, type ExerciseMeta } from '../exercises';
+import { displayName, imageUrl } from '../exerciseDisplay';
 import { useExercises } from '../useExercises';
 import { weekStartISO } from '../utils';
-import { useT } from '../i18n';
+import { useI18n } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
 import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
@@ -21,7 +22,7 @@ const ALL_GROUPS: MuscleGroup[] = [
 ];
 
 export function PlanEditor() {
-  const t = useT();
+  const { t, locale } = useI18n();
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const planId = id;
@@ -38,7 +39,7 @@ export function PlanEditor() {
   const [focus, setFocus] = useState<MuscleGroup[]>([]);
   const [planExercises, setPlanExercises] = useState<PlanExercise[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [detailsFor, setDetailsFor] = useState<ExerciseMeta | null>(null);
+  const [detailsFor, setDetailsFor] = useState<CustomExercise | null>(null);
   const [loadedFromId, setLoadedFromId] = useState<string | undefined>(undefined);
 
   if (existing && existing.id !== loadedFromId) {
@@ -156,13 +157,14 @@ export function PlanEditor() {
           <ul className="space-y-2">
             {planExercises.map((pe) => {
               const ex = findEx(pe.exerciseId);
-              const exName = ex ? (t.exerciseName[ex.id] ?? ex.name) : pe.exerciseId;
+              const exName = ex ? displayName(ex, locale) : pe.exerciseId;
+              const img = ex ? imageUrl(ex.imagePath) : null;
               return (
                 <li key={pe.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 p-3">
                   <div className="flex items-start gap-2 mb-2">
-                    {ex?.images[0] ? (
+                    {img ? (
                       <img
-                        src={imageUrl(ex.images[0])}
+                        src={img}
                         alt=""
                         loading="lazy"
                         className="w-10 h-10 rounded object-cover bg-slate-700"
@@ -172,7 +174,7 @@ export function PlanEditor() {
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-sm truncate">{exName}</div>
-                      {ex && <div className="text-xs text-slate-400 capitalize">{ex.equipment}</div>}
+                      {ex?.equipment && <div className="text-xs text-slate-400 capitalize">{ex.equipment}</div>}
                     </div>
                     {ex && (
                       <button
@@ -265,42 +267,46 @@ function ExercisePicker({
   onClose,
   onShowDetails,
 }: {
-  exercises: ExerciseMeta[];
+  exercises: CustomExercise[];
   excludeIds: string[];
   onPick: (id: string) => void;
   onClose: () => void;
-  onShowDetails: (ex: ExerciseMeta) => void;
+  onShowDetails: (ex: CustomExercise) => void;
 }) {
-  const t = useT();
+  const { t, locale } = useI18n();
   const favorites = useFavoriteIds();
   const [search, setSearch] = useState('');
+  const q = search.toLowerCase();
   const list = exercises.filter((e) => {
     if (excludeIds.includes(e.id)) return false;
     if (search === '') return true;
-    const local = t.exerciseName[e.id] ?? e.name;
-    const q = search.toLowerCase();
-    return local.toLowerCase().includes(q) || e.name.toLowerCase().includes(q);
+    const en = (e.nameEn ?? '').toLowerCase();
+    const zh = (e.nameZh ?? '').toLowerCase();
+    return en.includes(q) || zh.includes(q);
   });
   const favList = list.filter((e) => favorites.has(e.id));
   const restList = list.filter((e) => !favorites.has(e.id));
 
-  const renderRow = (ex: ExerciseMeta) => {
-    const name = t.exerciseName[ex.id] ?? ex.name;
+  const renderRow = (ex: CustomExercise) => {
+    const name = displayName(ex, locale);
     const isFav = favorites.has(ex.id);
+    const img = imageUrl(ex.imagePath);
     return (
       <li key={ex.id} className="flex items-stretch border-b border-slate-800 hover:bg-slate-800">
         <button
           onClick={() => onPick(ex.id)}
           className="flex-1 min-w-0 text-left px-4 py-3 flex items-center gap-3"
         >
-          {ex.images[0] ? (
-            <img src={imageUrl(ex.images[0])} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
+          {img ? (
+            <img src={img} alt="" loading="lazy" className="w-10 h-10 rounded object-cover bg-slate-700" />
           ) : (
             <div className="w-10 h-10 rounded bg-slate-700" />
           )}
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm truncate">{name}</div>
-            <div className="text-xs text-slate-400 truncate capitalize">{t.muscleGroup[ex.muscleGroup]} · {ex.equipment}</div>
+            <div className="text-xs text-slate-400 truncate capitalize">
+              {t.muscleGroup[ex.muscleGroup]}{ex.equipment ? ` · ${ex.equipment}` : ''}
+            </div>
           </div>
           {isFav && <span className="text-amber-400 text-sm shrink-0">★</span>}
         </button>

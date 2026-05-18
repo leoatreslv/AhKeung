@@ -5,6 +5,7 @@ import { db, muscleGroupColor } from '../db';
 import { weekStartISO, formatDate, formatDuration } from '../utils';
 import { useI18n } from '../i18n';
 import { useExercises } from '../useExercises';
+import { displayName } from '../exerciseDisplay';
 
 export function Home() {
   const { t, locale } = useI18n();
@@ -147,7 +148,7 @@ export function Home() {
                       ) : (
                         s.exercises.map((ex, idx) => {
                           const meta = catalog?.find((c) => c.id === ex.exerciseId);
-                          const name = meta ? (t.exerciseName[meta.id] ?? meta.name) : ex.exerciseId;
+                          const name = meta ? displayName(meta, locale) : ex.exerciseId;
                           const doneSets = ex.sets.filter((x) => x.done);
                           return (
                             <div key={idx} className="text-sm">
