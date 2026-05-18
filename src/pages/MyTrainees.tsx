@@ -124,9 +124,9 @@ export function MyTrainees() {
         )}
       </div>
 
-      <DesignationSection title={t.myTrainees.accepted}      rows={accepted} chip="bg-emerald-600/30 text-emerald-300 border-emerald-700/50" onRemove={undesignate} />
-      <DesignationSection title={t.myTrainees.pending}       rows={pending}  chip="bg-amber-600/30 text-amber-300 border-amber-700/50"      onRemove={undesignate} />
-      <DesignationSection title={t.myTrainees.declined}      rows={declined} chip="bg-slate-600/30 text-slate-400 border-slate-600"          onRemove={undesignate} />
+      <DesignationSection title={t.myTrainees.accepted} rows={accepted} chip="bg-emerald-600/30 text-emerald-300 border-emerald-700/50" onRemove={undesignate} canPromote />
+      <DesignationSection title={t.myTrainees.pending}  rows={pending}  chip="bg-amber-600/30 text-amber-300 border-amber-700/50"      onRemove={undesignate} />
+      <DesignationSection title={t.myTrainees.declined} rows={declined} chip="bg-slate-600/30 text-slate-400 border-slate-600"          onRemove={undesignate} />
 
       {(designations ?? []).length === 0 && (
         <p className="text-slate-500 text-sm bg-slate-800/50 rounded-lg p-3 text-center">
@@ -138,12 +138,13 @@ export function MyTrainees() {
 }
 
 function DesignationSection({
-  title, rows, chip, onRemove,
+  title, rows, chip, onRemove, canPromote,
 }: {
   title: string;
   rows: { traineeId: string; designatedAt: number }[];
   chip: string;
   onRemove: (traineeId: string) => void;
+  canPromote?: boolean;
 }) {
   const { t } = useI18n();
   if (rows.length === 0) return null;
@@ -155,6 +156,7 @@ function DesignationSection({
           <li key={r.traineeId} className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex items-center gap-2">
             <TraineeName id={r.traineeId} className="flex-1 text-sm" />
             <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${chip}`}>{title}</span>
+            {canPromote && <PromoteButton traineeId={r.traineeId} />}
             <button
               onClick={() => onRemove(r.traineeId)}
               aria-label={t.myTrainees.remove}
@@ -164,6 +166,40 @@ function DesignationSection({
         ))}
       </ul>
     </div>
+  );
+}
+
+function PromoteButton({ traineeId }: { traineeId: string }) {
+  const { t } = useI18n();
+  const [status, setStatus] = useState<'idle' | 'busy' | 'done' | string>('idle');
+
+  async function go() {
+    if (status === 'busy' || status === 'done') return;
+    if (!confirm(t.myTrainees.promoteConfirm)) return;
+    setStatus('busy');
+    try {
+      const { promoteToTrainer } = await import('../sharing');
+      await promoteToTrainer(traineeId);
+      setStatus('done');
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  if (status === 'done') {
+    return <span className="text-[10px] text-emerald-400">{t.myTrainees.promoted}</span>;
+  }
+  if (status !== 'idle' && status !== 'busy') {
+    return <span className="text-[10px] text-rose-400" title={status}>!</span>;
+  }
+  return (
+    <button
+      onClick={() => void go()}
+      disabled={status === 'busy'}
+      className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border bg-keung-600/30 text-keung-300 border-keung-700/50 disabled:opacity-50"
+    >
+      {status === 'busy' ? '…' : t.myTrainees.promote}
+    </button>
   );
 }
 

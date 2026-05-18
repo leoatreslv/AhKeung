@@ -187,6 +187,9 @@ export const zhHant: Translation = {
     pending: '待回覆',
     declined: '已拒絕',
     empty: '還未有學員。在上方搜尋並指派一位用戶。',
+    promote: '升級',
+    promoted: '已升級',
+    promoteConfirm: '將這位學員升級為教練?升級後他們可以自行建立動作及指派自己的學員。',
   },
 
   share: {

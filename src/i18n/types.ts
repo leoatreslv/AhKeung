@@ -184,6 +184,9 @@ export interface Translation {
     pending: string;
     declined: string;
     empty: string;
+    promote: string;
+    promoted: string;
+    promoteConfirm: string;
   };
 
   share: {

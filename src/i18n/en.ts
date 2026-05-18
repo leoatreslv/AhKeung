@@ -187,6 +187,9 @@ export const en: Translation = {
     pending: 'Pending',
     declined: 'Declined',
     empty: 'No trainees yet. Search for a user above to designate them.',
+    promote: 'Promote',
+    promoted: 'Promoted',
+    promoteConfirm: 'Promote this trainee to trainer? They will be able to author exercises and designate their own trainees.',
   },
 
   share: {

@@ -102,6 +102,15 @@ export function ExerciseEditor() {
   async function remove() {
     if (!id) return;
     if (!confirm(t.exerciseEditor.deleteConfirm)) return;
+    // Cascade: drop this exercise from every bundle that contains it.
+    // The server-side trigger does the same on the server, but doing it
+    // client-side too keeps the trainer's local Dexie consistent without
+    // waiting for the next pull tick.
+    const memberships = await db.exerciseBundleItems
+      .where('exerciseId').equals(id).toArray();
+    for (const m of memberships) {
+      await deleteWithSync('exerciseBundleItems', m.bundleId, m.exerciseId);
+    }
     await deleteWithSync('exercises', id);
     navigate('/exercises');
   }

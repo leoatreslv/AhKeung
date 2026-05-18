@@ -57,3 +57,12 @@ export async function sharePlan(planId: string, recipientId: string): Promise<st
   if (!res.data) throw new Error('share_plan returned no id');
   return res.data;
 }
+
+/** Promotes another user to trainer. Callable only by trainers; the
+ *  promote_to_trainer SECURITY DEFINER RPC enforces that and bypasses
+ *  the profiles_write tightening that otherwise forbids self-elevation. */
+export async function promoteToTrainer(target: string): Promise<void> {
+  const res = await getSupabase().rpc('promote_to_trainer', { target }) as
+    { error: { message: string } | null };
+  if (res.error) throw new Error(res.error.message);
+}
