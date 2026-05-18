@@ -51,6 +51,7 @@ export interface Plan extends OwnedRow {
    *  to the same trainee. UI filters to `superseded_by == null` for the
    *  "current" assigned plan; older copies still exist for history. */
   supersededBy?: string | null;
+  deletedAt?: number;
 }
 
 export interface SetLog {

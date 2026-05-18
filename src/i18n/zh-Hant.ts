@@ -49,6 +49,7 @@ export const zhHant: Translation = {
     exercisesPlanned: (n) => `已安排 ${n} 個動作`,
     sessionSummary: (e, s) => `${e} 個動作 · 完成 ${s} 組`,
     noWorkouts: '還沒有訓練紀錄,動起來吧!',
+    assignedByTrainer: '教練派發的計劃',
   },
 
   plans: {
@@ -171,5 +172,42 @@ export const zhHant: Translation = {
     newButton: '＋ 新增',
     empty: '還沒有組合。把多個動作集成一個組合方便分享給學員。',
     exerciseCount: (n) => `${n} 個動作`,
+  },
+
+  myTrainees: {
+    title: '我的學員',
+    addByName: '尋找學員',
+    searchPlaceholder: '輸入顯示名稱搜尋…',
+    searching: '搜尋中…',
+    noResults: '找不到符合的用戶。',
+    designate: '指派',
+    remove: '移除',
+    removeConfirm: '確定要移除這位學員嗎?',
+    accepted: '已接受',
+    pending: '待回覆',
+    declined: '已拒絕',
+    empty: '還未有學員。在上方搜尋並指派一位用戶。',
+  },
+
+  share: {
+    button: '分享',
+    shareTitle: '分享',
+    shareWithCount: (n) => `分享給 ${n} 人`,
+    sharing: '分享中…',
+    noAcceptedTrainees: '尚未有學員接受邀請。請先到「我的學員」指派並讓對方接受。',
+    sharePlan: '分享此計劃',
+    sharePlanTitle: '分享計劃',
+    sharePlanSuccess: (n) => `已分享給 ${n} 位學員。`,
+    sharePlanFailed: '分享失敗',
+  },
+
+  designation: {
+    pendingTitle: '待回覆的指派',
+    wantsToTrain: '想成為你的教練。',
+    accept: '接受',
+    decline: '拒絕',
+    yourTrainers: '你的教練',
+    block: '封鎖',
+    blockConfirm: '封鎖這位教練?他們將不能再分享內容給你。',
   },
 };

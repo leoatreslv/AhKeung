@@ -46,6 +46,7 @@ export interface Translation {
     exercisesPlanned: (n: number) => string;
     sessionSummary: (exCount: number, setsDone: number) => string;
     noWorkouts: string;
+    assignedByTrainer: string;
   };
 
   plans: {
@@ -168,5 +169,42 @@ export interface Translation {
     newButton: string;
     empty: string;
     exerciseCount: (n: number) => string;
+  };
+
+  myTrainees: {
+    title: string;
+    addByName: string;
+    searchPlaceholder: string;
+    searching: string;
+    noResults: string;
+    designate: string;
+    remove: string;
+    removeConfirm: string;
+    accepted: string;
+    pending: string;
+    declined: string;
+    empty: string;
+  };
+
+  share: {
+    button: string;
+    shareTitle: string;
+    shareWithCount: (n: number) => string;
+    sharing: string;
+    noAcceptedTrainees: string;
+    sharePlan: string;
+    sharePlanTitle: string;
+    sharePlanSuccess: (n: number) => string;
+    sharePlanFailed: string;
+  };
+
+  designation: {
+    pendingTitle: string;
+    wantsToTrain: string;
+    accept: string;
+    decline: string;
+    yourTrainers: string;
+    block: string;
+    blockConfirm: string;
   };
 }

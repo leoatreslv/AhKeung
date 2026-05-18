@@ -6,6 +6,7 @@ import { weekStartISO, formatDate, formatDuration } from '../utils';
 import { useI18n } from '../i18n';
 import { useExercises } from '../useExercises';
 import { displayName } from '../exerciseDisplay';
+import { DesignationBanner } from '../components/DesignationBanner';
 
 export function Home() {
   const { t, locale } = useI18n();
@@ -34,6 +35,8 @@ export function Home() {
 
   return (
     <div className="p-4 space-y-4">
+      <DesignationBanner />
+      <AssignedPlansCard />
       <section>
         <h2 className="text-sm uppercase tracking-wider text-slate-400 mb-2">{t.home.thisWeek}</h2>
         {currentPlan ? (
@@ -187,5 +190,54 @@ export function Home() {
         )}
       </section>
     </div>
+  );
+}
+
+// Plans assigned to the current user by a trainer. Filter to the
+// "current" assignment per trainer (superseded_by IS NULL) so the
+// trainee doesn't drown in re-shared history.
+function AssignedPlansCard() {
+  const { t, locale } = useI18n();
+  const assigned = useLiveQuery(
+    async () => {
+      const rows = await db.plans
+        .filter((p) => !!p.assignedBy && !p.supersededBy && !p.deletedAt)
+        .toArray();
+      return rows.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    },
+    [],
+  );
+  if (!assigned || assigned.length === 0) return null;
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-wider text-slate-400 mb-2">{t.home.assignedByTrainer}</h2>
+      <ul className="space-y-2">
+        {assigned.map((p) => (
+          <li key={p.id} className="bg-slate-800 rounded-xl border border-slate-700 p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="font-bold text-sm flex-1">{p.name}</h3>
+              <span className="text-xs text-slate-400">{formatDate(p.weekStart, locale)}</span>
+            </div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {p.focus.map((m) => (
+                <span key={m} className={`${muscleGroupColor[m]} text-white text-[10px] px-1.5 py-0.5 rounded`}>
+                  {t.muscleGroup[m]}
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Link
+                to={`/workout/${p.id}`}
+                className="flex-1 bg-keung-600 hover:bg-keung-700 text-white py-1.5 rounded text-center text-sm font-semibold"
+              >{t.home.startWorkout}</Link>
+              <Link
+                to={`/plans/${p.id}`}
+                className="px-3 bg-slate-700 hover:bg-slate-600 text-white py-1.5 rounded text-sm"
+              >{t.common.edit}</Link>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

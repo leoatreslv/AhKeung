@@ -14,8 +14,11 @@ import { weekStartISO } from '../utils';
 import { useI18n } from '../i18n';
 import { useFavoriteIds } from '../useFavorites';
 import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
+import { ShareSheet } from '../components/ShareSheet';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
+import { useAuth } from '../auth/useAuth';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
+import { sharePlan } from '../sharing';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -27,6 +30,7 @@ export function PlanEditor() {
   const navigate = useNavigate();
   const planId = id;
   const userId = useCurrentUserId();
+  const { profile } = useAuth();
   const catalog = useExercises();
 
   const existing = useLiveQuery(
@@ -40,6 +44,8 @@ export function PlanEditor() {
   const [planExercises, setPlanExercises] = useState<PlanExercise[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [detailsFor, setDetailsFor] = useState<CustomExercise | null>(null);
+  const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [loadedFromId, setLoadedFromId] = useState<string | undefined>(undefined);
 
   if (existing && existing.id !== loadedFromId) {
@@ -243,6 +249,15 @@ export function PlanEditor() {
         )}
       </div>
 
+      {/* Share plan — trainer-only, only meaningful once the plan is saved. */}
+      {planId && profile?.isTrainer && (
+        <button
+          onClick={() => setShareSheetOpen(true)}
+          className="w-full mt-2 py-2 border border-keung-600 text-keung-500 rounded-lg text-sm font-semibold"
+        >📤 {t.share.sharePlan}</button>
+      )}
+      {shareStatus && <p className="text-xs text-slate-400 text-center">{shareStatus}</p>}
+
       {pickerOpen && (
         <ExercisePicker
           exercises={filteredExercises}
@@ -255,6 +270,25 @@ export function PlanEditor() {
 
       {detailsFor && (
         <ExerciseDetailsModal exercise={detailsFor} onClose={() => setDetailsFor(null)} />
+      )}
+
+      {shareSheetOpen && planId && (
+        <ShareSheet
+          title={`${t.share.sharePlanTitle}: ${name}`}
+          onClose={() => setShareSheetOpen(false)}
+          onConfirm={async (recipientIds) => {
+            try {
+              for (const r of recipientIds) {
+                await sharePlan(planId, r);
+              }
+              setShareStatus(t.share.sharePlanSuccess(recipientIds.length));
+            } catch (e) {
+              setShareStatus(
+                `${t.share.sharePlanFailed}: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
+          }}
+        />
       )}
     </div>
   );

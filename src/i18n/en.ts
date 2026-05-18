@@ -49,6 +49,7 @@ export const en: Translation = {
     exercisesPlanned: (n) => `${n} exercises planned`,
     sessionSummary: (e, s) => `${e} exercises · ${s} sets done`,
     noWorkouts: 'No workouts yet. Time to lift!',
+    assignedByTrainer: 'Assigned by your trainer',
   },
 
   plans: {
@@ -171,5 +172,42 @@ export const en: Translation = {
     newButton: '+ New',
     empty: 'No bundles yet. Group exercises into a bundle to share them as a set.',
     exerciseCount: (n) => `${n} exercise${n === 1 ? '' : 's'}`,
+  },
+
+  myTrainees: {
+    title: 'My trainees',
+    addByName: 'Find a trainee',
+    searchPlaceholder: 'Search by display name…',
+    searching: 'Searching…',
+    noResults: 'No matches.',
+    designate: 'Designate',
+    remove: 'Remove',
+    removeConfirm: 'Remove this trainee?',
+    accepted: 'Accepted',
+    pending: 'Pending',
+    declined: 'Declined',
+    empty: 'No trainees yet. Search for a user above to designate them.',
+  },
+
+  share: {
+    button: 'Share',
+    shareTitle: 'Share',
+    shareWithCount: (n) => n === 1 ? 'Share with 1' : `Share with ${n}`,
+    sharing: 'Sharing…',
+    noAcceptedTrainees: 'No accepted trainees yet. Designate one from My Trainees and have them accept first.',
+    sharePlan: 'Share this plan',
+    sharePlanTitle: 'Share plan',
+    sharePlanSuccess: (n) => `Shared with ${n} trainee${n === 1 ? '' : 's'}.`,
+    sharePlanFailed: 'Share failed',
+  },
+
+  designation: {
+    pendingTitle: 'Pending designations',
+    wantsToTrain: 'would like to be your trainer.',
+    accept: 'Accept',
+    decline: 'Decline',
+    yourTrainers: 'Your trainer(s)',
+    block: 'Block',
+    blockConfirm: 'Block this trainer? They will no longer be able to share anything with you.',
   },
 };

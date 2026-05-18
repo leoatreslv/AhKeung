@@ -11,6 +11,7 @@ import { MyExercises } from './pages/MyExercises';
 import { ExerciseEditor } from './pages/ExerciseEditor';
 import { MyBundles } from './pages/MyBundles';
 import { BundleEditor } from './pages/BundleEditor';
+import { MyTrainees } from './pages/MyTrainees';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useT } from './i18n';
 import { useAuth } from './auth/useAuth';
@@ -79,6 +80,7 @@ function Shell() {
           <Route path="/bundles" element={<MyBundles />} />
           <Route path="/bundles/new" element={<BundleEditor />} />
           <Route path="/bundles/:id" element={<BundleEditor />} />
+          <Route path="/trainees" element={<MyTrainees />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>

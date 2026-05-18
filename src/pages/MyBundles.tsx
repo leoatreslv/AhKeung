@@ -1,15 +1,19 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { useI18n } from '../i18n';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { useAuth } from '../auth/useAuth';
+import { ShareSheet } from '../components/ShareSheet';
+import { shareResource } from '../sharing';
 
 export function MyBundles() {
   const { t } = useI18n();
   const userId = useCurrentUserId();
   const { profile } = useAuth();
   const navigate = useNavigate();
+  const [shareTarget, setShareTarget] = useState<{ id: string; name: string } | null>(null);
 
   const bundles = useLiveQuery(
     async () => {
@@ -70,8 +74,8 @@ export function MyBundles() {
       ) : (
         <ul className="space-y-2">
           {bundles.map((b) => (
-            <li key={b.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-              <Link to={`/bundles/${b.id}`} className="block p-3">
+            <li key={b.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden flex items-stretch">
+              <Link to={`/bundles/${b.id}`} className="flex-1 p-3 min-w-0">
                 <div className="font-semibold text-sm">{b.name}</div>
                 {b.description && (
                   <div className="text-xs text-slate-400 truncate">{b.description}</div>
@@ -80,9 +84,26 @@ export function MyBundles() {
                   {t.myBundles.exerciseCount(counts?.get(b.id) ?? 0)}
                 </div>
               </Link>
+              <button
+                onClick={() => setShareTarget({ id: b.id, name: b.name })}
+                aria-label={t.share.button}
+                className="px-3 text-slate-400 hover:text-keung-500 border-l border-slate-700"
+              >📤</button>
             </li>
           ))}
         </ul>
+      )}
+
+      {shareTarget && userId && (
+        <ShareSheet
+          title={`${t.share.shareTitle}: ${shareTarget.name}`}
+          onClose={() => setShareTarget(null)}
+          onConfirm={async (recipientIds) => {
+            for (const r of recipientIds) {
+              await shareResource('bundle', shareTarget.id, r, userId);
+            }
+          }}
+        />
       )}
     </div>
   );

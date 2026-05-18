@@ -3,6 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { getSupabase } from '../supabase';
 import { useAuth } from '../auth/useAuth';
 import { useI18n } from '../i18n';
+import { useMyTrainers, partitionByStatus } from '../useDesignations';
+import { useDisplayName } from '../useDisplayName';
+import { db } from '../db';
 
 export function Settings() {
   const { user, profile, signOut } = useAuth();
@@ -86,24 +89,33 @@ export function Settings() {
       {profile?.isTrainer && (
         <div className="border-t border-slate-800 pt-4 space-y-2">
           <p className="text-xs uppercase tracking-wider text-slate-500">Trainer tools</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <Link
               to="/exercises"
               className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl p-3 text-center"
             >
               <div className="text-2xl">🏋️</div>
-              <div className="text-sm mt-1">{t.myExercises.title}</div>
+              <div className="text-xs mt-1">{t.myExercises.title}</div>
             </Link>
             <Link
               to="/bundles"
               className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl p-3 text-center"
             >
               <div className="text-2xl">📦</div>
-              <div className="text-sm mt-1">{t.myBundles.title}</div>
+              <div className="text-xs mt-1">{t.myBundles.title}</div>
+            </Link>
+            <Link
+              to="/trainees"
+              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl p-3 text-center"
+            >
+              <div className="text-2xl">👥</div>
+              <div className="text-xs mt-1">{t.myTrainees.title}</div>
             </Link>
           </div>
         </div>
       )}
+
+      <YourTrainersSection />
 
       <p className="text-sm text-slate-400">Signed in as {user?.email}</p>
       <button
@@ -111,5 +123,58 @@ export function Settings() {
         className="bg-rose-900/40 border border-rose-800 text-rose-300 px-4 py-2 rounded-lg"
       >Sign out</button>
     </div>
+  );
+}
+
+function YourTrainersSection() {
+  const { t } = useI18n();
+  const trainers = useMyTrainers();
+  const { accepted } = partitionByStatus(trainers);
+  if (accepted.length === 0) return null;
+  return (
+    <div className="border-t border-slate-800 pt-4 space-y-2">
+      <p className="text-xs uppercase tracking-wider text-slate-500">{t.designation.yourTrainers}</p>
+      <ul className="space-y-1">
+        {accepted.map((d) => (
+          <TrainerRow key={d.trainerId} trainerId={d.trainerId} traineeId={d.traineeId} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function TrainerRow({ trainerId, traineeId }: { trainerId: string; traineeId: string }) {
+  const { t } = useI18n();
+  const name = useDisplayName(trainerId);
+  const [busy, setBusy] = useState(false);
+
+  async function block() {
+    if (busy) return;
+    if (!confirm(t.designation.blockConfirm)) return;
+    setBusy(true);
+    try {
+      const { error } = await getSupabase().from('trainer_trainees')
+        .update({ status: 'declined', responded_at: new Date().toISOString() })
+        .eq('trainer_id', trainerId)
+        .eq('trainee_id', traineeId) as { error: { message: string } | null };
+      if (error) return;
+      await db.trainerTrainees
+        .where('[trainerId+traineeId]')
+        .equals([trainerId, traineeId])
+        .modify({ status: 'declined', respondedAt: Date.now(), updatedAt: Date.now() });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex items-center gap-2">
+      <span className="flex-1 text-sm">{name ?? '…'}</span>
+      <button
+        onClick={() => void block()}
+        disabled={busy}
+        className="text-xs text-slate-400 hover:text-rose-400 disabled:opacity-50"
+      >{t.designation.block}</button>
+    </li>
   );
 }

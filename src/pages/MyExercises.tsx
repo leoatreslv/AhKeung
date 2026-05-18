@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, muscleGroupColor } from '../db';
@@ -5,12 +6,15 @@ import { useI18n } from '../i18n';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { useAuth } from '../auth/useAuth';
 import { displayName, imageUrl } from '../exerciseDisplay';
+import { ShareSheet } from '../components/ShareSheet';
+import { shareResource } from '../sharing';
 
 export function MyExercises() {
   const { t, locale } = useI18n();
   const userId = useCurrentUserId();
   const { profile } = useAuth();
   const navigate = useNavigate();
+  const [shareTarget, setShareTarget] = useState<{ id: string; name: string } | null>(null);
 
   const exercises = useLiveQuery(
     async () => {
@@ -61,8 +65,8 @@ export function MyExercises() {
             const name = displayName(ex, locale);
             const img = imageUrl(ex.imagePath);
             return (
-              <li key={ex.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-                <Link to={`/exercises/${ex.id}`} className="block p-3 flex items-center gap-3">
+              <li key={ex.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden flex items-stretch">
+                <Link to={`/exercises/${ex.id}`} className="flex-1 p-3 flex items-center gap-3 min-w-0">
                   {img ? (
                     <img
                       src={img}
@@ -83,10 +87,27 @@ export function MyExercises() {
                     {t.muscleGroup[ex.muscleGroup]}
                   </span>
                 </Link>
+                <button
+                  onClick={() => setShareTarget({ id: ex.id, name })}
+                  aria-label={t.share.button}
+                  className="px-3 text-slate-400 hover:text-keung-500 border-l border-slate-700"
+                >📤</button>
               </li>
             );
           })}
         </ul>
+      )}
+
+      {shareTarget && userId && (
+        <ShareSheet
+          title={`${t.share.shareTitle}: ${shareTarget.name}`}
+          onClose={() => setShareTarget(null)}
+          onConfirm={async (recipientIds) => {
+            for (const r of recipientIds) {
+              await shareResource('exercise', shareTarget.id, r, userId);
+            }
+          }}
+        />
       )}
     </div>
   );
