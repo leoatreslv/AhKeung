@@ -94,6 +94,11 @@ export interface CustomExercise extends SyncedRow {
   imagePath: string | null;
   createdAt: number;
   deletedAt?: number;
+  /** Client-only: a freshly-picked image waiting to be uploaded to
+   *  Supabase Storage. Stripped from server payloads by the mapping layer
+   *  and skipped by the push worker until cleared. Once the upload sweep
+   *  succeeds, `imagePath` is set and this field is removed. */
+  pendingImageBlob?: Blob;
 }
 
 export interface ExerciseBundle extends SyncedRow {

@@ -1,5 +1,6 @@
 import { runPushOnce } from './pushWorker';
 import { runPullOnce } from './pullWorker';
+import { runImageUploadSweep } from './imageUploadSweep';
 
 let pushTimer: ReturnType<typeof setInterval> | null = null;
 let pullTimer: ReturnType<typeof setInterval> | null = null;
@@ -9,15 +10,23 @@ async function safeRun(fn: () => Promise<void>): Promise<void> {
   try { await fn(); } catch (e) { console.warn('[sync]', e); }
 }
 
+// Image upload always runs immediately before push: when the sweep
+// succeeds, the row's existing syncQueue entry picks up the new
+// imagePath on the same push tick.
+async function pushWithSweep(): Promise<void> {
+  await runImageUploadSweep();
+  await runPushOnce();
+}
+
 export async function flushNow(): Promise<void> {
-  await safeRun(runPushOnce);
+  await safeRun(pushWithSweep);
   await safeRun(runPullOnce);
 }
 
 export function startSync(): void {
-  pushTimer = setInterval(() => { safeRun(runPushOnce); }, 30_000);
+  pushTimer = setInterval(() => { safeRun(pushWithSweep); }, 30_000);
   pullTimer = setInterval(() => { safeRun(runPullOnce); }, 60_000);
-  const onTrigger = () => { safeRun(runPushOnce); safeRun(runPullOnce); };
+  const onTrigger = () => { safeRun(pushWithSweep); safeRun(runPullOnce); };
   window.addEventListener('online', onTrigger);
   window.addEventListener('visibilitychange', onTrigger);
   listeners.push({ event: 'online', handler: onTrigger });

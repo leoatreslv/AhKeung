@@ -129,6 +129,10 @@ export interface Translation {
     equipmentPlaceholder: string;
     instructions: string;
     instructionsPlaceholder: string;
+    image: string;
+    imagePick: string;
+    imageReplace: string;
+    imageUploading: string;
     save: string;
     delete: string;
     deleteConfirm: string;

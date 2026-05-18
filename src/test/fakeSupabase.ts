@@ -31,10 +31,13 @@ interface Builder extends PromiseLike<QueryResult> {
   ): Promise<QueryResult | TResult>;
 }
 
+interface StoredObject { bucket: string; path: string; blob: Blob; contentType: string }
+
 export function createFakeSupabase() {
   const tables: Tables = {
     profiles: [], plans: [], sessions: [], metrics: [], favorites: [],
   };
+  const storage: StoredObject[] = [];
   let session: Session | null = null;
   let networkUp = true;
   const listeners: AuthListener[] = [];
@@ -167,6 +170,22 @@ export function createFakeSupabase() {
       async signOut() { session = null; notify('SIGNED_OUT'); return { error: null }; },
     },
     from(name: string) { return builder(name); },
+    storage: {
+      from(bucket: string) {
+        return {
+          async upload(path: string, blob: Blob, opts?: { contentType?: string; upsert?: boolean }) {
+            if (!networkUp) return { data: null, error: new Error('network failure (fake)') };
+            const existing = storage.findIndex((o) => o.bucket === bucket && o.path === path);
+            if (existing >= 0) {
+              if (!opts?.upsert) return { data: null, error: new Error('already exists') };
+              storage.splice(existing, 1);
+            }
+            storage.push({ bucket, path, blob, contentType: opts?.contentType ?? blob.type });
+            return { data: { path }, error: null };
+          },
+        };
+      },
+    },
   };
 
   return {
@@ -193,6 +212,7 @@ export function createFakeSupabase() {
       return (tables[table] ?? []).find((r) => r.id === id) as Row;
     },
     tables,
+    storage,
   };
 }
 

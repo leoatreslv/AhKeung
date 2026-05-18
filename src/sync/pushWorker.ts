@@ -55,6 +55,10 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
   if (entry.op === 'insert') {
     const local = await localRowFor(entry);
     if (!local) { await db.syncQueue.delete(entry.seq!); return; }
+    // If a row is still waiting for image upload, skip this push attempt.
+    // The image-upload sweep runs before each push; the next iteration will
+    // find imagePath set and proceed.
+    if ((local as { pendingImageBlob?: Blob }).pendingImageBlob) return;
     const payload = toServerRow(local);
     const res = await getSupabase().from(d.serverTable).insert(payload).select() as
       { data: { updated_at: string }[] | null; error: { message: string } | null };
@@ -67,6 +71,7 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
   if (entry.op === 'update') {
     const local = await localRowFor(entry);
     if (!local) { await db.syncQueue.delete(entry.seq!); return; }
+    if ((local as { pendingImageBlob?: Blob }).pendingImageBlob) return;
     const payload = toServerRow(local);
     let q = getSupabase().from(d.serverTable).update(payload);
     q = applyServerKeyFilter(d, q, entry.rowId);

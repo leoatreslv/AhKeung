@@ -33,7 +33,7 @@ function camelToSnake(s: string): string {
   return s.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
 }
 
-const CLIENT_ONLY_FIELDS = new Set(['serverVersion']);
+const CLIENT_ONLY_FIELDS = new Set(['serverVersion', 'pendingImageBlob']);
 
 // Fields whose values are epoch-ms on the client and timestamptz on the server.
 // We convert on the way out (ms → ISO) and back on the way in (ISO → ms) so the
