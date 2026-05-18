@@ -9,7 +9,21 @@ import {
   type TableDescriptor,
 } from './descriptors';
 
-const TABLE_ORDER: SyncTableName[] = ['plans', 'sessions', 'metrics', 'favorites'];
+// Pull order matters for FK-style dependencies: exercises and bundles
+// must arrive before plans (which may reference exercises in their JSON)
+// and before shares (which reference exercises/bundles by id). bundle
+// items follow their parent bundles. trainer_trainees stands alone.
+const TABLE_ORDER: SyncTableName[] = [
+  'exercises',
+  'exerciseBundles',
+  'exerciseBundleItems',
+  'trainerTrainees',
+  'shares',
+  'plans',
+  'sessions',
+  'metrics',
+  'favorites',
+];
 
 async function hasPending(table: SyncTableName, rowId: string): Promise<boolean> {
   const count = await db.syncQueue.where('rowId').equals(rowId).and((e) => e.table === table).count();
@@ -40,12 +54,18 @@ async function mergeRow(
   // layer. Read it from the raw row — fromServerRow now converts *_at strings
   // back to epoch ms for Dexie storage, so camel.updatedAt is a number here.
   const serverVersion = serverRow.updated_at as string;
+  // Trust the server for the owner column. The previous version stamped
+  // `[d.ownerClientField] = userId`, which was a no-op for own-only tables
+  // (server's user_id matches the puller) but corrupted shared-in rows by
+  // overwriting the real owner with the current viewer's id. The server is
+  // the authority on ownership; fromServerRow has already converted the
+  // snake_case column to the right camelCase field.
   const local: Record<string, unknown> = {
     ...camel,
-    [d.ownerClientField]: userId,
     updatedAt: Date.now(),
     serverVersion,
   };
+  void userId;
   await db.table(d.dexieTable).put(local as never);
 }
 

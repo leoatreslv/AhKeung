@@ -644,6 +644,21 @@ easiest to revert.
 
 ### Resolution log
 
+Two latent sync-layer bugs surfaced while writing the PR 6 roundtrip
+test and are recorded here for posterity:
+
+- **`pullWorker` only iterated 4 of 9 sync tables.** PR 1 added
+  descriptors for exercises / bundles / bundle_items / shares /
+  trainer_trainees but never appended them to `TABLE_ORDER`, so the
+  client only pulled the four PR 0 tables. Fixed in PR 6: ordered
+  pull (exercises before plans, shares after trainer_trainees, etc.).
+- **`mergeRow` stamped `[ownerClientField] = userId` on every pulled
+  row.** No-op for own-only tables (server `user_id` matched), but it
+  corrupted shared-in rows by overwriting the real owner (e.g. a
+  trainer's exercise pulled by the trainee would land with
+  `ownerId = TRAINEE`). The server is the authority on ownership;
+  PR 6 drops the overwrite.
+
 | Finding | Status | Where addressed |
 |---|---|---|
 | B1 | **Landed in PR 1** | Migration `0002_custom_exercises.sql`: `exercises_read` has no jsonb-containment branch; plan-share emits explicit exercise share rows via the `share_plan` RPC. |
@@ -660,7 +675,7 @@ easiest to revert.
 | S11 | **Landed in PR 1** | `exercises.name_en` and `name_zh` are nullable with `check (coalesce(name_en, name_zh) is not null)`. Dexie's `CustomExercise` interface types both as `string \| null`. Display-time fallback is the responsibility of the UI in PR 3. |
 | W12 | **Landed in PR 2** | `vite.config.ts` runtime cache list reordered: more-specific `exerciseImagesPattern` (CacheFirst for the Supabase Storage `exercise-images` bucket origin path) is matched before the catch-all NetworkOnly rule on the Supabase origin. Pattern derived from `VITE_SUPABASE_URL` at build time. |
 | W14 | **Landed in PR 4** | `CustomExercise.pendingImageBlob?: Blob` field (client-only — stripped by `CLIENT_ONLY_FIELDS` so it never reaches PostgREST). The sync orchestrator runs `runImageUploadSweep()` immediately before every push: uploads each owned exercise with a pending blob to `exercise-images/{ownerId}/{rowId}.jpg`, then atomically clears the blob and sets `imagePath`. The push worker skips rows whose `pendingImageBlob` is still set, so an offline pick survives across browser sessions and is published cleanly when connectivity returns. |
-| W15 | **Partially landed in PR 1** | Client-side: descriptor unit tests for the new tables; S5-guard regression test for cross-user write rejection. Full server-side RLS denial tests (pgTAP / supabase test harness) deferred to PR 5 when the share UX is wired and integration coverage is meaningful. |
+| W15 | **Client side fully landed in PR 6** | PR 1: descriptor unit tests + S5-guard regression. PR 5: shareResource happy/idempotent/unshare + designation status lifecycle tests. PR 6: full client-side roundtrip (`src/test/roundtrip.test.ts`) exercising trainer-creates-exercise → designate → trainee-accept → trainer-share → trainee-pull-on-fresh-device → trainee-plans-and-favourites-the-shared-row, asserting on every server table and Dexie shape along the way. Server-side RLS denial coverage (pgTAP) still deferred — the fake Supabase doesn't enforce RLS. |
 | W16 | **Accepted, noted as risk** | Flagged in Risks/open item 1; revisit when trainer pool grows. |
 | O17 | **Deferred** | Out of scope for this work; tracked as a pre-launch hardening task. |
 | O18 | **Landed in PR 1** | Every new mutable table (`exercises`, `exercise_bundles`, `shares`) has `deleted_at`; pull worker already honours soft-delete tombstones. `exercise_bundle_items` and `trainer_trainees` are hard-deleted by design (status flips for trainer_trainees; bundle items are re-derived by trainer-side bundle editor). |
