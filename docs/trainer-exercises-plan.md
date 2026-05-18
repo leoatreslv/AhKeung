@@ -1,44 +1,43 @@
 # Trainer-owned custom exercises with sharing
 
-**Status:** approved 2026-05-18, ready to implement
+**Status:** revised 2026-05-18 after independent review, ready to implement
 **Scope:** replaces the free-exercise-db catalogue with a trainer-authored
 exercise library, adds explicit sharing to trainees, and introduces a
-trainer↔trainee designation relationship.
+trainer↔trainee designation relationship with a lightweight consent step.
+
+> **Revision note.** This revision folds in all 4 blocking and 7 should-fix
+> findings from the independent review section below. See the resolution log
+> at the bottom for a per-finding trace from review item → PR.
 
 ## Background
 
-The app currently ships an 873-entry catalogue sourced from
-[free-exercise-db](https://github.com/yuhonas/free-exercise-db). Exercises
-are identified by stable string slugs (e.g. `Barbell_Squat`) and images come
-from a public CDN. A `t.exerciseName` overlay in `src/i18n/zh-Hant.ts` ships
-~75 hand-curated Chinese names; the rest fall back to English.
-
-The auth & sync foundation (Supabase + RLS + push/pull workers) is in place.
-The schema already anticipates a trainer relationship: `profiles.is_trainer`,
-a `trainer_names` view, and `plans.assigned_by`. Read RLS lets any trainer
-see every user's owned rows.
+The app currently ships an 873-entry catalogue from
+[free-exercise-db](https://github.com/yuhonas/free-exercise-db) referenced by
+stable string slugs (e.g. `Barbell_Squat`). The auth & sync foundation
+(Supabase + RLS + push/pull workers) is in place. The schema anticipates a
+trainer relationship: `profiles.is_trainer`, the `trainer_names` view, and
+`plans.assigned_by`. Read RLS lets any trainer see every user's owned rows.
 
 ## Goals
 
 - Trainers author their own exercises (bilingual, optional image).
 - Trainers explicitly share **exercises**, **named bundles**, or **whole
-  plans** to specific trainees they've designated.
-- A trainer "picks" a trainee; that act designates the trainer to the
-  trainee and adds the trainee to the trainer's share-with picker.
-- The free-exercise-db catalogue is removed entirely (the app is
-  pre-launch; no data to migrate).
+  plans** to specific trainees they have designated.
+- A trainer "picks" a trainee, putting the pair into a pending state; the
+  trainee accepts (or declines) before any share is visible.
+- Free-exercise-db is removed entirely (the app is pre-launch).
 - Camera capture for exercise images on phone.
-- Optional one-click Google Translate to fill the other-language name.
+- Optional one-click Google Translate to fill the other-language name,
+  routed through a server-side Edge Function (key never ships to the client).
 
 ## Non-goals
 
 - Email-based trainee invitations (v1 picks from `profiles`).
-- Real-time propagation of trainer plan edits to trainees. Trainer
-  workflow is "edit → Save as new plan → re-share"; cloned plans are
-  independent rows on the trainee side.
-- Per-exercise language overlay strings in i18n. Names live in the
-  data, not in i18n files.
-- Tightening trainer read scope on sessions/metrics/favorites. Trainers
+- Propagation of trainer plan edits to trainees. Trainer workflow is
+  "edit → Save as new plan → re-share"; cloned plans are independent rows
+  on the trainee side. `superseded_by` on `plans` marks the previous copy.
+- Per-exercise language overlay strings in i18n. Names live in the data.
+- Tightening trainer read scope on sessions/metrics/favorites — trainers
   retain global read on those, as today.
 
 ## Data model
@@ -49,16 +48,20 @@ see every user's owned rows.
 create table exercises (
   id            uuid        primary key default gen_random_uuid(),
   owner_id      uuid        not null references profiles(id) on delete cascade,
-  name_en       text        not null,
-  name_zh       text        not null,
-  muscle_group  text        not null,  -- one of the 9 MuscleGroup values
+  name_en       text,
+  name_zh       text,
+  muscle_group  text        not null,
   equipment     text,
-  instructions  text,                  -- plain text, multi-paragraph
-  image_path    text,                  -- Storage key, null if no image
+  instructions  text,
+  image_path    text,
   created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
+  updated_at    timestamptz not null default now(),
+  deleted_at    timestamptz,
+  -- at least one name required; trainer can fill the other later
+  check (name_en is not null or name_zh is not null)
 );
-create index exercises_owner on exercises(owner_id);
+create index exercises_owner          on exercises(owner_id) where deleted_at is null;
+create index exercises_owner_updated  on exercises(owner_id, updated_at);
 
 create table exercise_bundles (
   id          uuid        primary key default gen_random_uuid(),
@@ -66,16 +69,19 @@ create table exercise_bundles (
   name        text        not null,
   description text,
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  updated_at  timestamptz not null default now(),
+  deleted_at  timestamptz
 );
-create index exercise_bundles_owner on exercise_bundles(owner_id);
+create index exercise_bundles_owner on exercise_bundles(owner_id) where deleted_at is null;
 
 create table exercise_bundle_items (
-  bundle_id   uuid not null references exercise_bundles(id) on delete cascade,
-  exercise_id uuid not null references exercises(id) on delete cascade,
-  position    int  not null default 0,
+  bundle_id   uuid        not null references exercise_bundles(id) on delete cascade,
+  exercise_id uuid        not null references exercises(id) on delete restrict,
+  position    int         not null default 0,
+  updated_at  timestamptz not null default now(),
   primary key (bundle_id, exercise_id)
 );
+create index exercise_bundle_items_exercise on exercise_bundle_items(exercise_id);
 
 create table shares (
   id            uuid        primary key default gen_random_uuid(),
@@ -84,42 +90,77 @@ create table shares (
   resource_type text        not null check (resource_type in ('exercise','bundle','plan')),
   resource_id   uuid        not null,
   created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  deleted_at    timestamptz,
   unique (resource_type, resource_id, recipient_id)
 );
-create index shares_recipient on shares(recipient_id);
+create index shares_recipient_resource on shares(recipient_id, resource_type, resource_id) where deleted_at is null;
 
 create table trainer_trainees (
   trainer_id    uuid        not null references profiles(id) on delete cascade,
   trainee_id    uuid        not null references profiles(id) on delete cascade,
+  status        text        not null default 'pending'
+                check (status in ('pending','accepted','declined')),
   designated_at timestamptz not null default now(),
+  responded_at  timestamptz,
+  updated_at    timestamptz not null default now(),
   primary key (trainer_id, trainee_id)
 );
+create index trainer_trainees_trainee on trainer_trainees(trainee_id);
 ```
+
+All new tables get the existing `touch_updated_at` trigger so optimistic
+concurrency in the push worker has a column to check.
+
+### Normalized join table for plan exercises
+
+```sql
+create table plan_exercises (
+  plan_id     uuid not null references plans(id) on delete cascade,
+  exercise_id uuid not null references exercises(id) on delete restrict,
+  position    int  not null,
+  primary key (plan_id, exercise_id, position)
+);
+create index plan_exercises_exercise on plan_exercises(exercise_id);
+
+-- Trigger: re-derive plan_exercises from plans.exercises::jsonb on every
+-- write. The denormalized JSON column stays as the client-friendly shape;
+-- the join table exists purely so RLS and access checks can use a real
+-- index. Trigger code in the migration.
+```
+
+The `plans.exercises` JSON column keeps its current shape (the client
+already serialises it that way); the join table is a server-side derived
+projection that RLS uses. Resolves B1 (no more jsonb containment with
+`::text`) and B2 (a real btree index for the exercise→plans lookup).
 
 ### Modified existing tables
 
 - `plans.exercises` JSON: each `exerciseId` becomes a UUID referencing
   `exercises(id)` (was a free-exercise-db slug).
-- `sessions.exercises[].exerciseId`: same.
-- `favorites`: composite PK becomes `(user_id, exercise_id)` where
-  `exercise_id` is a UUID referencing `exercises(id)`.
+- `plans` gains `superseded_by uuid references plans(id) on delete set
+  null` so the trainee can see which assigned plan from a trainer is
+  current. (S7)
+- `sessions.exercises[].exerciseId`: UUID instead of slug.
+- `favorites`: composite PK becomes `(user_id, exercise_id)` referencing
+  `exercises(id)`.
 
-Since the app is pre-launch, no SQL data migration; the Dexie v4 → v5
-upgrade simply wipes (matching the v3 → v4 comment).
+Pre-launch, the Dexie v4 → v5 upgrade wipes; the SQL migration drops and
+recreates affected columns in one transaction.
 
 ### RLS
 
 | Table | SELECT | INSERT / UPDATE / DELETE |
 |---|---|---|
-| `exercises` | owner OR direct share OR via bundle share OR via plan share | owner only |
+| `exercises` | owner OR direct exercise share OR via bundle share | owner only |
 | `exercise_bundles` | owner OR bundle share recipient | owner only |
-| `exercise_bundle_items` | parent bundle SELECT | parent bundle owner |
+| `exercise_bundle_items` | parent-bundle SELECT | parent-bundle owner |
 | `shares` | granter OR recipient | granter only |
-| `trainer_trainees` | trainer or trainee on the row | trainer only |
-| `plans` | unchanged (owner OR `is_trainer()`) | unchanged |
+| `trainer_trainees` | trainer or trainee on the row | trainer inserts; trainee updates `status`/`responded_at` only |
+| `plans` | unchanged | unchanged |
 
-The exercise SELECT policy is the only complex one — it has to look up
-shares of three different shapes. Expressed as:
+`exercises_read` is now two `EXISTS` branches, not three, and both join
+against indexed columns:
 
 ```sql
 create policy exercises_read on exercises for select using (
@@ -127,6 +168,7 @@ create policy exercises_read on exercises for select using (
   or exists (
     select 1 from shares s
     where s.recipient_id = auth.uid()
+      and s.deleted_at is null
       and s.resource_type = 'exercise'
       and s.resource_id = exercises.id
   )
@@ -134,214 +176,298 @@ create policy exercises_read on exercises for select using (
     select 1 from shares s
     join exercise_bundle_items i on i.bundle_id = s.resource_id
     where s.recipient_id = auth.uid()
+      and s.deleted_at is null
       and s.resource_type = 'bundle'
       and i.exercise_id = exercises.id
-  )
-  or exists (
-    select 1 from shares s
-    join plans p on p.id = s.resource_id
-    where s.recipient_id = auth.uid()
-      and s.resource_type = 'plan'
-      and p.exercises::jsonb @> jsonb_build_array(jsonb_build_object('exerciseId', exercises.id::text))
   )
 );
 ```
 
+The "via plan share" branch is gone: plan-share now emits explicit
+exercise share rows (see Sharing semantics), so this policy doesn't need
+to traverse `plans.exercises`. The normalized `plan_exercises` join table
+exists for future RLS use (e.g. analytics) and for the alternative path
+described in the resolution log under S6.
+
+`trainer_trainees` is enforced with a `WITH CHECK` that
+`trainer_id = auth.uid()` on insert, and a separate update policy that
+only lets the trainee modify `status` and `responded_at`:
+
+```sql
+create policy trainer_trainees_insert on trainer_trainees
+  for insert with check (trainer_id = auth.uid());
+create policy trainer_trainees_trainee_respond on trainer_trainees
+  for update using (trainee_id = auth.uid())
+  with check (trainee_id = auth.uid());
+```
+
 ### Storage
 
-Bucket `exercise-images`, public read. Write policy: authenticated
-users may upload into `{auth.uid()}/...` and modify only their own
-prefix. Path convention `{owner_id}/{uuid}.jpg`. Files are JPEG after
-client-side resize to a 1024 px long edge.
+Bucket `exercise-images`, public read. Write policy: authenticated users
+may upload only into `{auth.uid()}/...`. Path convention
+`{owner_id}/{uuid}.jpg`. Files are JPEG after client-side resize to a
+1024 px long edge.
 
 ### Dexie v5
 
-New client-side tables (Dexie schema bump from 4 → 5):
-
 ```
-exercises:           id, ownerId, muscleGroup, updatedAt
-exerciseBundles:     id, ownerId, updatedAt
-exerciseBundleItems: [bundleId+exerciseId], bundleId, exerciseId
-shares:              id, recipientId, [resourceType+resourceId], updatedAt
-trainerTrainees:     [trainerId+traineeId], trainerId, traineeId
+exercises:           id, ownerId, muscleGroup, updatedAt, deletedAt
+exerciseBundles:     id, ownerId, updatedAt, deletedAt
+exerciseBundleItems: [bundleId+exerciseId], bundleId, exerciseId, updatedAt
+shares:              id, recipientId, [resourceType+resourceId], updatedAt, deletedAt
+trainerTrainees:     [trainerId+traineeId], trainerId, traineeId, status, updatedAt
+planExercises:       [planId+exerciseId], planId, exerciseId   -- read-only cache, populated from pull
 ```
 
 v4 → v5 upgrade: wipe (pre-launch).
 
-`putWithSync` / `deleteWithSync` registers the new tables. The compound
-key on `exerciseBundleItems` follows the same pattern already used for
-`favorites`.
+## Sync layer refactor (new PR 0)
+
+`pullWorker.ts` today hard-codes `.eq('user_id', userId)` and the
+`putWithSync` discriminated union has a custom favorites branch hand-rolled
+into it. The new tables break both assumptions: `shares` is keyed by
+`recipient_id`, `trainer_trainees` by `trainer_id` or `trainee_id`,
+`exercise_bundle_items` has no owner column at all, and several tables
+must store rows the local user does not own. Resolves B3 and B4.
+
+**Approach: per-table descriptor.** Each synced table has a static
+descriptor:
+
+```ts
+type TableDescriptor<Row> = {
+  table: string;            // server table name (snake_case)
+  dexieTable: keyof DB;     // Dexie table name (camelCase)
+  primaryKey:
+    | { kind: 'single'; field: keyof Row }
+    | { kind: 'composite'; fields: [keyof Row, keyof Row] };
+  /** Server-side predicate the pull worker applies (in addition to RLS). */
+  pullPredicate:
+    | { kind: 'owner'; ownerField: 'user_id' | 'owner_id' | 'granter_id' | 'trainer_id' }
+    | { kind: 'recipient'; field: 'recipient_id' | 'trainee_id' }
+    | { kind: 'rls-only' }; // server filters via RLS; client sends no extra predicate
+  /** Whether the local user is allowed to mutate rows in this table.
+   *  'own-only' (most), 'never' (shared-in, planExercises). */
+  writability: 'own-only' | 'never';
+  ownerField?: keyof Row;   // for the 'own-only' check at write time
+};
+```
+
+Pull worker iterates descriptors, building keyset-paginated queries per
+table. Push worker (and `putWithSync`/`deleteWithSync`) consults the
+`writability` and `ownerField` fields: shared-in rows are read-only,
+attempts to mutate return immediately without enqueuing. Resolves S5.
+
+The mapping layer (snake_case ↔ camelCase) stays. Tests now cover each
+descriptor branch (B3-specific regression test: a recipient successfully
+pulls a `shares` row).
 
 ## Sharing semantics
 
-Three resource types, two semantic models:
+Three resource types, two semantic models — and one extra emission:
 
-- **Exercises and bundles** — share = grant read access. A row in
-  `shares` is created; RLS gives the recipient SELECT on the resource.
-  Deleting the share row revokes access immediately.
-- **Plans** — share = clone. A new row is inserted into the trainee's
-  `plans` table with `assigned_by = granter.id` and the trainer's
-  exercise UUIDs copied as-is. The trainee owns the copy and can edit
-  it. Trainer edits to the original do not propagate.
+- **Exercises and bundles** — share = grant read. A row in `shares` is
+  created; RLS gives the recipient SELECT on the resource. Soft-delete
+  on the share row revokes access on the next pull. (Pull worker
+  honours `deleted_at`, resolves O18.)
+- **Plans** — share = clone + emit exercise grants. In a single
+  transaction:
+  1. Clone the plan into the trainee's `plans` with `assigned_by =
+     trainer.id`. If the trainee already has an assigned plan from this
+     trainer (`assigned_by = me` AND `superseded_by is null`), the new
+     clone gets `superseded_by = old_id` and the old one becomes
+     non-current.
+  2. For each `exerciseId` in the cloned plan, upsert a `shares` row
+     with `resource_type = 'exercise'`, `recipient_id = trainee.id`,
+     so the trainee retains exercise visibility regardless of plan
+     edits. (Resolves S6.)
 
-When a trainer wants to push an update to an already-shared plan, the
-flow is:
+  Done as a Postgres RPC (`share_plan(plan_id uuid, recipient_id uuid)`)
+  to keep the multi-row write atomic. Client calls via Supabase client.
 
-1. Open the original plan in the trainer's library.
-2. Tap "Save as new plan" — creates a fresh `id` owned by the trainer.
-3. Tap "Share" on the new plan, pick the trainee.
-4. The trainee gets a fresh assigned plan; the previous one stays in
-   their library unless they delete it (optionally, the share dialog
-   asks "replace existing assignment from you?").
+### Designation and consent (S9)
 
-## Trainer ↔ trainee designation
+Trainer designates a trainee → `trainer_trainees` row with
+`status = 'pending'`. The trainee sees a banner on Home asking to
+accept/decline; status flips to `accepted` or `declined` (RLS lets only
+the trainee write that column). Until `accepted`, shares from this
+trainer to this trainee are filtered out:
 
-"My trainees" is a trainer-only screen. The trainer searches the
-`profiles` list (already readable to trainers under existing RLS) and
-taps a row to designate. That inserts a `trainer_trainees` row, which:
-
-- Adds the trainee to every "Share with…" picker.
-- Surfaces a "Your trainer: X" badge on the trainee's Settings (and
-  Home) page via a join with `trainer_names`.
-- Optionally enables a future "auto-share my exercise library" toggle
-  (out of scope for v1).
-
-There is no consent step in v1. A trainer designation is reversible
-from the trainer side (delete the row). A trainee-side "decline /
-remove this trainer" affordance is a v1.1 nice-to-have.
-
-## Google Translate
-
-The exercise editor has two name fields. Next to each, a small "🌐"
-button calls the Google Cloud Translation v2 REST endpoint with the
-other field's value and the appropriate target locale.
-
-Env var: `VITE_GOOGLE_TRANSLATE_API_KEY` (added to `.env.example` and
-Netlify). The button is disabled with a tooltip if absent.
-
-Request:
-
-```
-POST https://translation.googleapis.com/language/translate/v2?key=KEY
-Content-Type: application/json
-{ "q": "Bench Press", "source": "en", "target": "zh-TW", "format": "text" }
+```sql
+-- In every shares-derived view/policy: require an accepted designation
+exists (
+  select 1 from trainer_trainees t
+  where t.trainer_id = shares.granter_id
+    and t.trainee_id = shares.recipient_id
+    and t.status = 'accepted'
+)
 ```
 
-Response: `data.translations[0].translatedText`. Failures show an inline
-error; the user can still type manually.
+This is enforced inside `exercises_read`, `exercise_bundles_read`, the
+share-plan RPC, and the assigned-plans view. A `declined` row blocks
+all future shares from that trainer; the trainer can delete and retry
+(creates a new `pending` row, which the trainee can decline again).
 
-## UI surfaces
+A trainee-side "Block this trainer" affordance writes `status =
+'declined'` and is sticky — the trainer can still see the row exists
+(so the UI can label them "declined") but cannot re-share.
+
+## Google Translate via Edge Function (S10)
+
+The Translate API key never ships to the client. Architecture:
+
+- Supabase Edge Function `translate-name` (in `supabase/functions/`).
+- Function reads `GOOGLE_TRANSLATE_API_KEY` from its own env (Supabase
+  Function secret, not `VITE_*`).
+- Authenticates the caller via the standard Supabase JWT verification
+  (the function template does this by default).
+- Body: `{ q, source, target }`. Returns `{ translatedText }` or an
+  error. Rate-limits per `auth.uid()` (simple Redis-less counter using
+  Postgres `rate_limits` table — out of scope for v1, just log usage).
+- Client (`useTranslate()` hook) calls
+  `supabase.functions.invoke('translate-name', { body: {...} })`.
+
+Resolves S10. The bundle no longer holds the key; the function can
+enforce per-user quotas; rotating the key is one Supabase Function
+secret update.
+
+## Bilingual exercise names (S11)
+
+`exercises` requires at least one of `name_en`, `name_zh`. The UI
+falls back: `displayName(locale, ex) = (ex.name_zh if locale=='zh-Hant'
+else ex.name_en) ?? ex.name_en ?? ex.name_zh ?? '(unnamed)'`.
+
+A Chinese-only trainer can publish without ever filling `name_en`; the
+trainer or recipient can tap "🌐 Translate" later. After translation,
+the field is saved with no special flag — the original author owns the
+edit.
+
+## UI surfaces (unchanged from previous revision)
 
 ### Trainer-facing
 
-- **My exercises** (`/exercises`) — list with edit / delete / share
-  buttons. CTA to add new.
+- **My exercises** (`/exercises`) — list with edit / delete / share buttons.
 - **Exercise editor** (`/exercises/new`, `/exercises/:id`) — bilingual
-  name + 🌐 translate, muscle-group chip, equipment, instructions,
-  optional image with camera capture.
-- **My bundles** (`/bundles`) — list, share button.
-- **Bundle editor** (`/bundles/new`, `/bundles/:id`) — name,
-  description, drag-to-reorder list of exercises.
-- **My trainees** — search the global `profiles` list, tap to
-  designate / un-designate. Likely lives under Settings.
-- **Plan editor** — picker now sources from owner's exercises;
-  "Save as new plan" alongside "Save".
-- **Share sheet** — opened from any of the above. Multi-select of
-  trainer's designated trainees.
+  names with 🌐 translate, muscle-group chip, equipment, instructions,
+  optional image.
+- **My bundles** (`/bundles`).
+- **Bundle editor** (`/bundles/new`, `/bundles/:id`).
+- **My trainees** — search `profiles`, tap to designate (`pending`).
+  Status of each designation visible inline.
+- **Plan editor** — picker sources from owner's exercises; "Save as new
+  plan" alongside "Save"; sharing emits the plan + exercise shares via
+  the RPC.
+- **Share sheet** — multi-select of trainer's `accepted` trainees.
 
 ### Trainee-facing
 
-- **Shared with me** library — replaces the old free-exercise-db
-  Library tab. Read-only list of exercises and bundles the trainee has
-  access to, grouped by sharing trainer.
-- **Plan editor's picker** — sources from accessible exercises (own +
-  shared via any path).
-- **Workout picker** — same.
-- **Home** — new "Assigned by your trainer" card listing
-  `plans.assigned_by IS NOT NULL`, with trainer display name.
-- **Settings** — "Your trainer(s): X, Y" derived from
-  `trainer_trainees` joined with `trainer_names`.
+- **Pending designations** — banner on Home with accept / decline.
+- **Shared with me** library — replaces the old Library tab.
+- **Plan editor / Workout picker** — sources from accessible exercises.
+- **Home** — "Assigned by your trainer" card listing
+  `assigned_by IS NOT NULL AND superseded_by IS NULL`, with trainer
+  display name (S7).
+- **Settings** — "Your trainer(s)" derived from accepted
+  `trainer_trainees`, with a "Block" affordance.
 
 ## i18n changes
 
-- Delete `t.exerciseName` entirely (873 strings of dead weight).
+- Delete `t.exerciseName` entirely.
 - Add strings for: exercise editor labels, share dialog, "shared with
   me" empty state, "assigned by" badge, "my trainees", translate
-  button + error messages, camera prompt. Both `en` and `zh-Hant`.
+  button + error messages, camera prompt, accept/decline designation
+  banner, "Block this trainer" confirmation.
 
 ## Code removal
 
 - `public/exercises.json`
 - `src/exercises.ts`
 - `src/useExercises.ts`
-- The jsdelivr CDN cache rule in `vite.config.ts`
+- The jsdelivr CDN cache rule in `vite.config.ts` is replaced (not just
+  removed) with a CacheFirst rule for the Supabase Storage
+  `exercise-images` bucket origin. (W12)
 - The 873-entry `exerciseName` overlay in `src/i18n/zh-Hant.ts` and the
-  matching field in `src/i18n/types.ts`
+  matching field in `src/i18n/types.ts`.
 - `src/test/exercises.test.ts`, the fixture-based fetch stub in
-  `src/test/setup.ts`, the fixture file itself
+  `src/test/setup.ts`, the fixture file itself.
 
-## Execution plan (5 PRs)
+## Execution plan (7 PRs)
 
-1. **Schema PR** — Supabase migration `0002`, Dexie v5, sync wiring,
-   tests for the new tables. The old `useExercises()` is replaced with
-   a stub that returns `[]`, so the existing UI compiles and tests
-   still pass.
-2. **Rip-out PR** — delete free-exercise-db files, drop the i18n
-   overlay, replace `imageUrl()` with a Supabase Storage URL builder.
-   Pickers temporarily render an empty state — that's expected until
-   PR 3.
-3. **Trainer authoring PR** — exercise editor (bilingual + translate),
-   bundle editor, my-exercises/my-bundles pages, image upload helper
-   (`resizeImage` + Storage upload), "My trainees" picker.
-4. **Sharing PR** — `shares` UX (exercise / bundle), plan-clone on
-   share, "Save as new plan", "Shared with me" library tab.
-5. **Trainee polish PR** — "Assigned plans" card on Home (with trainer
-   display name), trainee-side "Your trainer" badge, favourites
-   re-pointed at UUIDs.
+1. **PR 0 — Sync layer refactor.** Per-table descriptor model in
+   `src/sync/`. `pullWorker.ts` and `putWithSync.ts` consume
+   descriptors. Existing four tables get descriptors mirroring today's
+   behaviour. No schema changes; tests still pass. Resolves B3, B4, S5.
+2. **PR 1 — Schema + Dexie v5.** Supabase migration `0002` with all new
+   tables, RLS, `plan_exercises` trigger, `share_plan` RPC,
+   `touch_updated_at` triggers everywhere. Dexie v5. Descriptors for the
+   new tables. Tests for schema + RLS denial (W15). UI compiles against
+   stubbed `useExercises` returning `[]` — pickers show empty state
+   (W13 documented explicitly in the PR description).
+3. **PR 2 — Rip-out free-exercise-db.** Delete the catalogue, the
+   overlay, fixtures, and the jsdelivr cache rule; add the Supabase
+   Storage cache rule. Replace `imageUrl()` helper.
+4. **PR 3 — Exercise editor + Translate Edge Function.** Edge function
+   `translate-name` + secret. `useTranslate()` hook. Exercise editor UI
+   with bilingual names (nullable) and translate button. Bundle editor.
+   My-exercises / my-bundles list pages. **No image upload yet.**
+5. **PR 4 — Image upload + camera capture.** Storage upload helper,
+   `resizeImage()` utility, `<input capture="environment">` widget,
+   offline-queue handling (`pendingImageBlob` Dexie column + pre-push
+   sweep, W14). Wired into the exercise editor.
+6. **PR 5 — Designation + sharing UX.** "My trainees" page with
+   pending/accepted/declined states. Trainee-side designation banner.
+   Share sheet for exercises and bundles. `share_plan` RPC integration.
+7. **PR 6 — Trainee polish.** "Assigned plans" Home card with
+   `superseded_by` marking, trainee-side "Your trainer" badge,
+   favourites re-pointed at UUIDs, end-to-end roundtrip test of
+   trainer-creates-exercise → designation → share → trainee-uses-in-plan.
 
 ## Tests
 
-- Schema v5: table list + version (extends `src/test/db.test.ts`).
-- Exercises CRUD via `putWithSync`.
-- Bundles + bundle-items CRUD.
-- Share roundtrip: granter writes a row → recipient pulls via
-  `fakeSupabase` and sees the resource appear in their Dexie cache.
-- `resizeImage` utility: input 4000×3000 → output ≤1024 px long edge,
-  JPEG MIME, plausible quality.
-- Translate-button: mocked fetch; loading state; error path.
-- Drop tests that exercise the free-exercise-db fixture path.
+In addition to schema and CRUD coverage:
+
+- **RLS denial** (W15): a recipient without an `accepted` designation
+  cannot SELECT a shared exercise; after delete-from-shares, the row
+  disappears on next pull; non-trainer cannot insert
+  `trainer_trainees`.
+- **Designation consent flow**: pending → accepted → share visible;
+  pending → declined → share invisible; declined sticky.
+- **Plan-clone exercise emission**: share_plan RPC creates the shares
+  rows; recipient can read the referenced exercises; trainer later
+  deletes an exercise → recipient sees it disappear (exercises are
+  soft-deleted; FK is `on delete restrict`, so trainer must soft-delete
+  rather than hard-delete).
+- **Resize utility**: 4000×3000 → ≤1024 px long edge, JPEG.
+- **Translate function**: mocked Edge Function response; loading and
+  error states.
+- **Sync descriptor** (B3 regression): a recipient successfully pulls
+  rows owned by someone else (shares, exercises shared in).
 
 ## Risks / open items
 
-1. **Trainer-trainee discovery without invites.** A trainer browses
-   `profiles` — for a small user base that's fine; for a large one,
-   add search by display name (already cheap with a Postgres index)
-   and consider an email-invite flow in v1.1.
-2. **Plan-share replace-or-add.** When a trainer shares a plan to a
-   trainee who already has an `assigned_by = me` plan, do we replace
-   the previous one or always add a new one? Default: prompt the
-   trainer ("replace previous?"). Easy to flip later.
-3. **Image storage cost.** Each image ~50–200 KB after resize.
-   Negligible for a few hundred users; revisit if it grows.
-4. **Trainee-side consent.** v1 has none — any trainer can designate
-   any trainee. Acceptable for an invite-only beta; revisit before any
-   public launch.
-5. **Translate API key in a public bundle.** `VITE_*` env vars are
-   baked into the client bundle, so the key is visible. Restrict it in
-   the Google Cloud console to the production origin(s) and set a
-   daily quota. Treat key rotation as a routine ops task.
+1. **Trainee-trainee discovery without invites.** A trainer browses
+   `profiles`. For a small user base, fine. Email-invite flow is a
+   v1.1 candidate.
+2. **Designation declined-state is sticky.** A trainee who declined
+   then changed their mind has to ask the trainer to delete the row
+   and re-designate. UI affordance ("Allow X again") on the trainee
+   side is a v1.1 nice-to-have.
+3. **`is_trainer` is self-elevatable.** Locked down by a separate
+   admin RPC before public launch (O17, tracked separately).
+4. **Image storage cost.** Negligible for early users; revisit if
+   library grows large.
+5. **The plan-share RPC is a multi-statement transaction.** If the
+   exercise shares fail (e.g. unique constraint already satisfied),
+   the whole call should still succeed; design the RPC as
+   `insert ... on conflict do nothing` for the shares rows.
 
 ---
 
 ## Review (independent)
 
-An independent pass over this doc against the current code in
+An independent pass over the original draft against the current code in
 `supabase/migrations/0001_init.sql`, `src/db.ts`, `src/sync/*`, and the
-exercise-id call sites. Findings grouped by severity; the **Blocking**
-items have to be resolved before PR 1 starts or the migration will be
-re-cut. **Should-fix** items are correctness or UX gaps that the
-implementer should land alongside the relevant PR. **Worth considering**
-and **Out of scope but flag** are notes for the record.
+exercise-id call sites. Findings preserved here as historical record; the
+resolution log below maps each finding to where it's now addressed.
 
 ### Blocking
 
@@ -518,6 +644,24 @@ easiest to revert.
 
 ### Resolution log
 
-To be filled in as items are addressed in subsequent PRs. Format:
-`B1 — resolved in PR N: <approach>` or `S6 — accepted, scheduled PR M`
-or `O17 — deferred, tracked in issue #X`.
+| Finding | Status | Where addressed |
+|---|---|---|
+| B1 | **Resolved** | Dropped the jsonb containment branch. Plan-share now emits explicit `shares` rows for each referenced exercise (Sharing semantics), so `exercises_read` only checks direct + bundle shares. |
+| B2 | **Resolved** | `plan_exercises` normalized join table added with `(exercise_id)` index; `shares` indexed on `(recipient_id, resource_type, resource_id)`; `exercise_bundle_items` indexed on `(exercise_id)`. (Data model section.) |
+| B3 | **Resolved in PR 0** | Sync layer refactor introduces per-table descriptors with `pullPredicate` and `writability`. `pullWorker.ts` and `putWithSync.ts` consume them; no more hard-coded `user_id`. |
+| B4 | **Resolved in PR 0** | Same descriptor model: composite PKs, non-`user_id` owner columns, and "store rows owned by others" are all expressible. |
+| S5 | **Resolved in PR 0** | `writability: 'own-only'` check guards `putWithSync`/`deleteWithSync`. Shared-in rows return early without enqueuing. |
+| S6 | **Resolved** | `share_plan` RPC emits exercise shares atomically with the plan clone. Trainer soft-deletes (FK `on delete restrict` blocks hard delete) → trainee loses access on next pull. |
+| S7 | **Resolved** | `plans.superseded_by` column added; assigned-plans card filters to `superseded_by IS NULL` for "current," shows older as collapsed history. |
+| S8 | **Resolved** | `shares` gains `updated_at` + `touch_updated_at` trigger; participates in OCC like every other synced table. |
+| S9 | **Resolved** | `trainer_trainees.status` added; share-visibility policies gated on `accepted`. Trainee-side accept/decline banner on Home, "Block this trainer" affordance on Settings. |
+| S10 | **Resolved** | Google Translate moved into Supabase Edge Function `translate-name`. Client invokes via `supabase.functions.invoke`; key never ships to the bundle. |
+| S11 | **Resolved** | `exercises.name_en` and `name_zh` are nullable with a CHECK that at least one is non-null. UI falls back at display time. |
+| W12 | **Resolved** | PWA runtime cache rule repointed at the Supabase Storage `exercise-images` origin. (Code removal section.) |
+| W13 | **Accepted, documented** | PR 1 description will state explicitly: "pickers render empty state between PR 1 and PR 3." |
+| W14 | **Resolved in PR 4** | `pendingImageBlob` Dexie column + pre-push upload sweep. Specified in the PR 4 description. |
+| W15 | **Resolved** | RLS denial tests, share-revoke tests, and `trainer_trainees` denial tests added to the test plan. |
+| W16 | **Accepted, noted as risk** | Flagged in Risks/open item 1; revisit when trainer pool grows. |
+| O17 | **Deferred** | Out of scope for this work; tracked as a pre-launch hardening task. The plan notes the dependency. |
+| O18 | **Resolved** | `deleted_at` added to every new mutable table; pull worker already honours soft-delete tombstones. |
+| O19 | **Resolved** | PR 3 split into PR 3 (editor + translate) and PR 4 (image upload + camera). PR sequence is now 7 PRs, not 5. |
