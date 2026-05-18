@@ -40,6 +40,15 @@ export function MyTrainees() {
     if (!q) { setResults([]); return; }
     setSearching(true);
     setSearchError(null);
+    // Drop focus from the input so iOS dismisses the keyboard immediately.
+    // Otherwise the first tap on a result row just hides the keyboard
+    // (because the input had focus) and the click event is swallowed —
+    // the user has to tap a second time. Blurring up-front lets the
+    // first tap fire the designate handler.
+    if (typeof document !== 'undefined') {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === 'function') active.blur();
+    }
     try {
       // Trainer RLS allows reading every profile. ILIKE matches case-
       // insensitively against display_name; limit caps the result set.
@@ -109,8 +118,9 @@ export function MyTrainees() {
             {results.map((p) => (
               <li key={p.id}>
                 <button
+                  type="button"
                   onClick={() => void designate(p.id)}
-                  className="w-full text-left px-3 py-2 flex items-center hover:bg-slate-700"
+                  className="w-full text-left px-3 py-3 min-h-[44px] flex items-center hover:bg-slate-700 active:bg-slate-600"
                 >
                   <span className="flex-1 text-sm">{p.display_name ?? '(no name)'}</span>
                   <span className="text-keung-500 text-sm">+ {t.myTrainees.designate}</span>
