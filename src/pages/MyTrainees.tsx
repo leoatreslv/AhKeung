@@ -120,7 +120,7 @@ export function MyTrainees() {
                 <button
                   type="button"
                   onClick={() => void designate(p.id)}
-                  className="w-full text-left px-3 py-3 min-h-[44px] flex items-center hover:bg-slate-700 active:bg-slate-600"
+                  className="w-full text-left px-3 py-3 min-h-[44px] flex items-center touch-manipulation hover:bg-slate-700 active:bg-slate-600"
                 >
                   <span className="flex-1 text-sm">{p.display_name ?? '(no name)'}</span>
                   <span className="text-keung-500 text-sm">+ {t.myTrainees.designate}</span>
