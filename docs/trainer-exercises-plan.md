@@ -330,3 +330,194 @@ error; the user can still type manually.
    baked into the client bundle, so the key is visible. Restrict it in
    the Google Cloud console to the production origin(s) and set a
    daily quota. Treat key rotation as a routine ops task.
+
+---
+
+## Review (independent)
+
+An independent pass over this doc against the current code in
+`supabase/migrations/0001_init.sql`, `src/db.ts`, `src/sync/*`, and the
+exercise-id call sites. Findings grouped by severity; the **Blocking**
+items have to be resolved before PR 1 starts or the migration will be
+re-cut. **Should-fix** items are correctness or UX gaps that the
+implementer should land alongside the relevant PR. **Worth considering**
+and **Out of scope but flag** are notes for the record.
+
+### Blocking
+
+**B1. The `plans` JSON containment check in `exercises_read` is
+fragile.** `src/db.ts` defines `PlanExercise` as
+`{ exerciseId, targetSets, ... }` and `putWithSync` writes it verbatim
+into `plans.exercises` (the mapping layer in `src/sync/mapping.ts` only
+renames *top-level* keys; JSON values are passed through). So the array
+element on the server has camelCase keys — the `@>` probe matches
+casing-wise. The real risk is the `::text` cast on `exercises.id`.
+Postgres stringifies UUIDs in a canonical lowercase form, but if the
+client ever upper-cases a UUID (some `crypto.randomUUID()` polyfills
+do), the containment misses silently. Two cleaner options: standardize
+on `to_jsonb(exercises.id)` rather than `jsonb_build_object` +
+`::text`, or replace this RLS branch entirely with a normalized
+`plan_exercises` join table (see B2).
+
+**B2. RLS performance on `exercises_read` will not scale.** Each
+`SELECT` on `exercises` evaluates three `EXISTS` subqueries per row.
+The third one does `plans p` × jsonb containment with no usable index
+(btree on `p.exercises` can't help, and no GIN index is proposed).
+With 100 trainers × 200 exercises × 50 plans this is a sequential
+scan per request. The migration should include:
+- A normalized `plan_exercises (plan_id, exercise_id, position)` join
+  table, populated by a trigger on `plans` writes, with
+  `(exercise_id)` indexed. The third RLS branch becomes a flat join.
+- A GIN or btree on `shares (recipient_id, resource_type, resource_id)`.
+- An index on `exercise_bundle_items(exercise_id)` — the PK is
+  `(bundle_id, exercise_id)`, so lookups by `exercise_id` alone are
+  unindexed today.
+
+**B3. The push/pull workers assume `user_id` ownership.**
+`pullWorker.ts` hard-codes `.eq('user_id', userId)`. `shares` has no
+`user_id` (it has `granter_id` + `recipient_id`), `trainer_trainees`
+has `trainer_id` + `trainee_id`, `exercise_bundle_items` has no owner
+column at all, and shared `exercises`/`bundles` arrive read-only with
+someone else's `owner_id`. The pull worker needs per-table ownership
+predicates and per-table tombstone semantics. The push side's "only
+push my own rows" remains correct *if* pull knows how to fetch
+others'. This is a substantial refactor of `pullWorker.ts` that PR 1
+quietly inherits — call it out as a scoped sub-task.
+
+**B4. `SyncTableName` and the `putWithSync` discriminated union don't
+accommodate the new tables cleanly.** Today it's a four-arm union with
+a custom favorites branch. The new tables introduce three new shapes:
+composite PKs (`exercise_bundle_items`, `trainer_trainees`), an owner
+column that isn't `user_id` (`shares.granter_id`), and rows that must
+be *stored* in Dexie even though their owner is someone else
+(`exercises`/`bundles` arriving via share). The type has to model
+"owner column name" and "row key shape" as parameters — PR 1's "stub
+`useExercises` to return `[]`" doesn't make this go away.
+
+### Should-fix
+
+**S5. Recipients deleting cached shared rows is undefined.** A stray
+"remove from my library" gesture on a shared exercise would currently
+enqueue a soft-delete that RLS rejects with 403 → dead letter. Add a
+rule at the `putWithSync` / `deleteWithSync` boundary: shared rows
+(`ownerId !== currentUserId`) are read-only in Dexie. Trying to mutate
+returns immediately without enqueuing.
+
+**S6. Plan-clone dangling references.** Plan clone copies `exerciseId`
+UUIDs as-is. The trainer can later delete one of those exercises (the
+`exercises` table has no FK from `plans.exercises` since the refs live
+inside JSON), and the trainee then has a plan referencing a row RLS
+won't return. Two fixes:
+- On plan-share, also insert `shares` rows for each referenced
+  exercise so the trainee retains read access regardless of plan
+  membership.
+- Or tombstone-on-delete for exercises that have ever been shared
+  (block hard-delete, mark with `archived_at`).
+Pick (a) as the simpler one; it composes with the existing RLS.
+
+**S7. Re-share UX is half-specified.** The "replace previous
+assignment from you?" prompt only exists in the open-items section.
+The trainee has no way to tell which assigned plan from a trainer is
+"current." Either add `superseded_by uuid` on `plans`, or at least
+order the assigned-plans card by `created_at desc` and mark the
+latest with a chip.
+
+**S8. `shares` has no `updated_at` in the proposed schema.** The push
+worker's OCC check is `eq('updated_at', expectedServerVersion)` on
+update; without that column the check is undefined. Either add
+`updated_at` + the `touch_updated_at` trigger (treat shares as
+mutable for future-proofing), or special-case the sync queue to skip
+OCC for shares (and document them as immutable: any "edit" is a
+delete + insert).
+
+**S9. Trainer-trainee designation: no consent, no block-list.** A
+trainer can unilaterally designate any user — including other trainers
+— and the trainee can't refuse before pull. Minimum bar for v1:
+- Add `status text check (status in ('pending','accepted','declined'))`
+  on `trainer_trainees`; gate share visibility on `accepted`.
+- Disallow designating users where `target.is_trainer = true` unless
+  the target opts in.
+- Surface a "Block this trainer" affordance on the trainee side that
+  inserts a `declined` row.
+The doc treats this as v1.1 but the abuse vector (a flagged trainer
+spamming plans/exercises into anyone's UI) makes it v1 table stakes.
+
+**S10. `VITE_GOOGLE_TRANSLATE_API_KEY` baked into the bundle is the
+wrong shape.** The doc acknowledges the visibility but proposes only
+Cloud-console origin restriction. Referer restrictions on Google
+Translate v2 are honored only when the request includes one — `fetch`
+from a non-browser doesn't. The correct shape is a tiny Supabase Edge
+Function (or Netlify function) that proxies the call with the key
+server-side and authenticates the caller via Supabase JWT. One file,
+one env var moves to server-side, abuse vector eliminated.
+
+**S11. Bilingual NOT NULL is hostile.** A Chinese-only trainer has to
+translate every entry just to publish. Fix: make one nullable, fall
+back at display time (`name_zh ?? name_en`); the translate button can
+populate the empty side and set a "translated, please review" hint
+without making the field required.
+
+### Worth considering
+
+**W12. PWA: more to remove than the jsdelivr rule.** The runtime cache
+pattern in `vite.config.ts` is useful — repoint it at the Supabase
+Storage `exercise-images` origin
+(`{project}.supabase.co/storage/v1/object/public/exercise-images/`)
+with the same CacheFirst policy. Otherwise every exercise list scroll
+burns bandwidth.
+
+**W13. PR 1 "compiles" ≠ "works."** With `useExercises` stubbed to
+return `[]`, any UI that does `useExercises().find(e => e.id === ...)`
+returns `undefined` and renders a blank card. Acceptable as a
+transitional state, but PR 1 should say explicitly that the app
+shows empty pickers and dead images between PR 1 and PR 3.
+
+**W14. Image upload offline story is missing.** Trainer adds an
+exercise with a photo while offline: the Dexie row queues, but the
+Storage upload isn't part of `syncQueue`. Pick one:
+- Defer exercise insert until upload succeeds (breaks offline).
+- Add `pendingImageBlob` on the Dexie row plus an upload queue that
+  runs before the sync push.
+
+**W15. Tests gap: RLS denial, share-revoke, jsonb regression.** The
+test plan covers happy-path CRUD. Add:
+- Non-recipient SELECT returns 0 rows for a shared exercise.
+- After `delete from shares`, the row disappears from a fresh
+  recipient pull.
+- Plan-share grants exercise visibility; removing the exercise from
+  the plan revokes it on next pull.
+- `trainer_trainees` insert from a non-trainer is rejected by RLS.
+
+**W16. `trainer_names` view + designation flow leaks profiles.** The
+trainer scans `profiles` to pick a trainee; with global trainer read,
+that's already allowed today. For a small beta, fine; flag it so it
+isn't forgotten when the trainer pool grows.
+
+### Out of scope but flag
+
+**O17. `is_trainer` is self-elevatable in the current schema.**
+`profiles_write` permits `id = auth.uid()` updates with check
+`id = auth.uid()` — any user can `update profiles set is_trainer =
+true where id = me`. Not introduced by this plan, but the plan's
+trust model assumes trainer status is privileged. Lock down with a
+column-level RLS or a separate `admin_set_trainer` RPC before this
+feature ships.
+
+**O18. Soft-delete semantics drift.** Existing tables use `deleted_at`
+tombstones; the new tables don't. `shares` and `trainer_trainees`
+would be hard-deleted, and the pull worker has no "row vanished"
+detection — revocations wouldn't propagate to recipients. Add
+`deleted_at` everywhere for consistency, or add an explicit "removed
+since cursor" sweep in pull.
+
+**O19. PR 3 is too wide.** Bundles exercise editor + bundle editor +
+image upload + camera capture + translate button + "My trainees" —
+five independent UX features. Split image-upload + camera into its
+own PR; it's the riskiest piece (permissions, EXIF, memory) and the
+easiest to revert.
+
+### Resolution log
+
+To be filled in as items are addressed in subsequent PRs. Format:
+`B1 — resolved in PR N: <approach>` or `S6 — accepted, scheduled PR M`
+or `O17 — deferred, tracked in issue #X`.
