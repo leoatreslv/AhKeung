@@ -185,3 +185,41 @@ describe('pushWorker — 401 refresh-and-retry', () => {
     expect(await db.syncQueue.count()).toBe(0);
   });
 });
+
+describe('pushWorker — favorites (composite primary key)', () => {
+  it('inserts a favorite using compound (user_id, exercise_id) filter', async () => {
+    stubAuthenticatedUser({ id: 'u-1' });
+    const fake = getActiveFake();
+
+    await putWithSync('favorites', { exerciseId: 'Pullups', addedAt: 1 }, 'u-1');
+    await runPushOnce();
+
+    // The fake stores rows by table; favorites has no `id` column, so the
+    // legacy code path (eq('id', ...)) would not have found it. Verify the
+    // row landed and the queue drained.
+    const favRow = fake.tables.favorites.find(
+      (r) => r.user_id === 'u-1' && r.exercise_id === 'Pullups',
+    );
+    expect(favRow).toBeDefined();
+    expect(await db.syncQueue.count()).toBe(0);
+
+    const local = await db.favorites.get(['u-1', 'Pullups']);
+    expect(local?.serverVersion).toBe(favRow!.updated_at);
+  });
+
+  it('soft-deletes a favorite via the compound key filter', async () => {
+    stubAuthenticatedUser({ id: 'u-1' });
+    const fake = getActiveFake();
+
+    await putWithSync('favorites', { exerciseId: 'Pullups', addedAt: 1 }, 'u-1');
+    await runPushOnce();
+    await deleteWithSync('favorites', 'u-1', 'Pullups');
+    await runPushOnce();
+
+    const favRow = fake.tables.favorites.find(
+      (r) => r.user_id === 'u-1' && r.exercise_id === 'Pullups',
+    );
+    expect(favRow?.deleted_at).toBeDefined();
+    expect(await db.syncQueue.count()).toBe(0);
+  });
+});

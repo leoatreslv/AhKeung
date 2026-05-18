@@ -1,7 +1,16 @@
-import { db, type SyncTableName, type Plan, type WorkoutSession, type BodyMetric, type Favorite } from '../db';
+import { db, type SyncTableName } from '../db';
+import {
+  descriptorFor,
+  rowIdFromKey,
+  rowIdFromClientRow,
+  type TableDescriptor,
+} from './descriptors';
 
+// Legacy helpers kept for callers outside src/sync/. The internal sync code
+// goes through the descriptors instead — these wrappers will eventually be
+// inlined once the last call site moves to descriptor-aware code.
 export function favoriteRowId(userId: string, exerciseId: string): string {
-  return `${userId}:${exerciseId}`;
+  return rowIdFromKey(descriptorFor('favorites'), [userId, exerciseId]);
 }
 
 export function parseFavoriteRowId(rowId: string): { userId: string; exerciseId: string } {
@@ -10,56 +19,78 @@ export function parseFavoriteRowId(rowId: string): { userId: string; exerciseId:
   return { userId: rowId.slice(0, idx), exerciseId: rowId.slice(idx + 1) };
 }
 
-type PartialOf<T extends SyncTableName> =
-  T extends 'plans'     ? Partial<Plan>           & { id: string }
-  : T extends 'sessions' ? Partial<WorkoutSession> & { id: string }
-  : T extends 'metrics'  ? Partial<BodyMetric>     & { id: string }
-  : T extends 'favorites'? Partial<Favorite>       & { exerciseId: string }
-  : never;
+type Partials = {
+  plans:     Partial<import('../db').Plan>           & { id: string };
+  sessions:  Partial<import('../db').WorkoutSession> & { id: string };
+  metrics:   Partial<import('../db').BodyMetric>     & { id: string };
+  favorites: Partial<import('../db').Favorite>       & { exerciseId: string };
+};
+type PartialOf<T extends SyncTableName> = Partials[T];
+
+/** Build the merged row that gets put into Dexie. Each descriptor's
+ *  ownerField is overwritten with the supplied userId. */
+function mergeRow(
+  d: TableDescriptor,
+  partial: Record<string, unknown>,
+  existing: Record<string, unknown> | undefined,
+  userId: string,
+): Record<string, unknown> {
+  const base: Record<string, unknown> = { ...existing, ...partial };
+  base[d.ownerClientField] = userId;
+  base.updatedAt = Date.now();
+  base.serverVersion = (existing?.serverVersion as string | null | undefined) ?? null;
+  // favorites needs addedAt fallback (it's part of the row, not a system column)
+  if (d.dexieTable === 'favorites') {
+    base.addedAt = base.addedAt ?? Date.now();
+  }
+  return base;
+}
+
+async function existingRow(
+  d: TableDescriptor,
+  partial: Record<string, unknown>,
+  userId: string,
+): Promise<Record<string, unknown> | undefined> {
+  if (d.pkKind === 'single') {
+    return await db.table(d.dexieTable).get(partial[d.pkClientFields[0]] as string) as
+      Record<string, unknown> | undefined;
+  }
+  // composite — for favorites, the first field is userId from arg, second from partial
+  const second = partial[d.pkClientFields[1]] as string;
+  return await db.table(d.dexieTable).get([userId, second]) as
+    Record<string, unknown> | undefined;
+}
 
 export async function putWithSync<T extends SyncTableName>(
   table: T, partial: PartialOf<T>, userId: string,
 ): Promise<void> {
-  await db.transaction('rw', db.table(table), db.syncQueue, async (tx) => {
-    if (table === 'favorites') {
-      const fav = partial as Partial<Favorite> & { exerciseId: string };
-      const favTable = tx.table<Favorite, [string, string]>('favorites');
-      const existing = await favTable.get([userId, fav.exerciseId]);
-      const row: Favorite = {
-        userId,
-        exerciseId: fav.exerciseId,
-        addedAt: fav.addedAt ?? existing?.addedAt ?? Date.now(),
-        updatedAt: Date.now(),
-        serverVersion: existing?.serverVersion ?? null,
-      };
-      await favTable.put(row);
-      await tx.table('syncQueue').add({
-        table: 'favorites',
-        rowId: favoriteRowId(userId, fav.exerciseId),
-        op: existing ? 'update' : 'insert',
-        expectedServerVersion: existing?.serverVersion ?? null,
-        attempts: 0, queuedAt: Date.now(),
-      });
-      return;
+  const d = descriptorFor(table);
+  if (d.writability === 'never') {
+    throw new Error(`${d.dexieTable} is a read-only synced table`);
+  }
+  await db.transaction('rw', db.table(table), db.syncQueue, async () => {
+    const existing = await existingRow(d, partial as unknown as Record<string, unknown>, userId);
+    const row = mergeRow(d, partial as unknown as Record<string, unknown>, existing, userId);
+
+    // Writability: shared-in rows (owner !== me) can't be mutated locally.
+    // For PR 0 all four descriptors are 'own-only' AND every row's owner is
+    // already the local user, so this branch is currently unreachable; PR 1
+    // adds tables where this triggers.
+    const existingOwner = existing?.[d.ownerClientField] as string | undefined;
+    if (existing && existingOwner && existingOwner !== userId) {
+      throw new Error(
+        `cannot mutate ${d.dexieTable} row owned by ${existingOwner} as ${userId}`,
+      );
     }
 
-    const t = tx.table(table);
-    const partialId = (partial as { id: string }).id;
-    const existing = await t.get(partialId);
-    const row = {
-      ...existing,
-      ...partial,
-      userId,
-      updatedAt: Date.now(),
-      serverVersion: existing?.serverVersion ?? null,
-    };
-    await t.put(row);
-    await tx.table('syncQueue').add({
+    await db.table(d.dexieTable).put(row);
+    await db.syncQueue.add({
       table,
-      rowId: partialId,
+      rowId: rowIdFromClientRow(d, row),
       op: existing ? 'update' : 'insert',
-      expectedServerVersion: existing?.serverVersion ?? null,
-      attempts: 0, queuedAt: Date.now(),
+      expectedServerVersion: (existing?.serverVersion as string | null | undefined) ?? null,
+      attempts: 0,
+      queuedAt: Date.now(),
     });
   });
 }
@@ -73,28 +104,33 @@ export async function deleteWithSync(
 export async function deleteWithSync(
   table: SyncTableName, a: string, b?: string,
 ): Promise<void> {
-  await db.transaction('rw', db.table(table), db.syncQueue, async (tx) => {
-    if (table === 'favorites') {
-      const userId = a; const exerciseId = b!;
-      const favTable = tx.table<Favorite, [string, string]>('favorites');
-      const existing = await favTable.get([userId, exerciseId]);
-      await favTable.delete([userId, exerciseId]);
-      await tx.table('syncQueue').add({
-        table: 'favorites',
-        rowId: favoriteRowId(userId, exerciseId),
-        op: 'delete',
-        expectedServerVersion: existing?.serverVersion ?? null,
-        attempts: 0, queuedAt: Date.now(),
-      });
-      return;
+  const d = descriptorFor(table);
+  if (d.writability === 'never') {
+    throw new Error(`${d.dexieTable} is a read-only synced table`);
+  }
+  await db.transaction('rw', db.table(table), db.syncQueue, async () => {
+    const rowId = d.pkKind === 'single' ? a : rowIdFromKey(d, [a, b!]);
+    const lookupKey: string | [string, string] = d.pkKind === 'single' ? a : [a, b!];
+    const existing = await db.table(d.dexieTable).get(lookupKey as never) as
+      Record<string, unknown> | undefined;
+
+    const existingOwner = existing?.[d.ownerClientField] as string | undefined;
+    // For single-PK tables we don't have a userId on the call site, so we
+    // can only enforce the guard for composite (where the caller passed it).
+    if (existing && existingOwner && d.pkKind === 'composite' && existingOwner !== a) {
+      throw new Error(
+        `cannot delete ${d.dexieTable} row owned by ${existingOwner} as ${a}`,
+      );
     }
-    const t = tx.table(table);
-    const existing = (await t.get(a)) as { serverVersion?: string | null } | undefined;
-    await t.delete(a);
-    await tx.table('syncQueue').add({
-      table, rowId: a, op: 'delete',
-      expectedServerVersion: existing?.serverVersion ?? null,
-      attempts: 0, queuedAt: Date.now(),
+
+    await db.table(d.dexieTable).delete(lookupKey as never);
+    await db.syncQueue.add({
+      table,
+      rowId,
+      op: 'delete',
+      expectedServerVersion: (existing?.serverVersion as string | null | undefined) ?? null,
+      attempts: 0,
+      queuedAt: Date.now(),
     });
   });
 }

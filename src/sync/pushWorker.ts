@@ -1,22 +1,31 @@
 import { getSupabase } from '../supabase';
-import { db, type SyncQueueRow, type SyncTableName } from '../db';
+import { db, type SyncQueueRow } from '../db';
 import { toServerRow } from './mapping';
-import { parseFavoriteRowId } from './putWithSync';
+import {
+  descriptorFor,
+  keyFromRowId,
+  applyServerKeyFilter,
+  type KeyFilterable,
+  type TableDescriptor,
+} from './descriptors';
 
 async function localRowFor(entry: SyncQueueRow): Promise<Record<string, unknown> | undefined> {
-  if (entry.table === 'favorites') {
-    const { userId, exerciseId } = parseFavoriteRowId(entry.rowId);
-    return await db.favorites.get([userId, exerciseId]) as Record<string, unknown> | undefined;
+  const d = descriptorFor(entry.table);
+  if (d.pkKind === 'composite') {
+    const key = keyFromRowId(d, entry.rowId) as [string, string];
+    return await db.table(d.dexieTable).get(key as never) as Record<string, unknown> | undefined;
   }
-  return await db.table(entry.table).get(entry.rowId) as Record<string, unknown> | undefined;
+  return await db.table(d.dexieTable).get(entry.rowId) as Record<string, unknown> | undefined;
 }
 
-async function setLocalServerVersion(table: SyncTableName, rowId: string, sv: string): Promise<void> {
-  if (table === 'favorites') {
-    const { userId, exerciseId } = parseFavoriteRowId(rowId);
-    await db.favorites.update([userId, exerciseId], { serverVersion: sv });
+async function setLocalServerVersion(
+  d: TableDescriptor, rowId: string, sv: string,
+): Promise<void> {
+  if (d.pkKind === 'composite') {
+    const key = keyFromRowId(d, rowId) as [string, string];
+    await db.table(d.dexieTable).update(key as never, { serverVersion: sv });
   } else {
-    await db.table(table).update(rowId, { serverVersion: sv });
+    await db.table(d.dexieTable).update(rowId, { serverVersion: sv });
   }
 }
 
@@ -42,15 +51,16 @@ async function bumpAttempts(entry: SyncQueueRow, err: unknown): Promise<void> {
 }
 
 async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promise<void> {
+  const d = descriptorFor(entry.table);
   if (entry.op === 'insert') {
     const local = await localRowFor(entry);
     if (!local) { await db.syncQueue.delete(entry.seq!); return; }
     const payload = toServerRow(local);
-    const res = await getSupabase().from(entry.table).insert(payload).select() as
+    const res = await getSupabase().from(d.serverTable).insert(payload).select() as
       { data: { updated_at: string }[] | null; error: { message: string } | null };
     if (res.error) throw new Error(res.error.message);
     const inserted = res.data?.[0];
-    if (inserted?.updated_at) await setLocalServerVersion(entry.table, entry.rowId, inserted.updated_at);
+    if (inserted?.updated_at) await setLocalServerVersion(d, entry.rowId, inserted.updated_at);
     await db.syncQueue.delete(entry.seq!);
     return;
   }
@@ -58,17 +68,19 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     const local = await localRowFor(entry);
     if (!local) { await db.syncQueue.delete(entry.seq!); return; }
     const payload = toServerRow(local);
-    let q = getSupabase().from(entry.table).update(payload).eq('id', entry.rowId);
+    let q = getSupabase().from(d.serverTable).update(payload);
+    q = applyServerKeyFilter(d, q, entry.rowId);
     if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);
     const res = await q.select() as { data: { updated_at: string }[] | null; error: { message: string } | null };
     if (res.error) throw new Error(res.error.message);
     const updated = res.data?.[0];
     if (updated?.updated_at) {
-      await setLocalServerVersion(entry.table, entry.rowId, updated.updated_at);
+      await setLocalServerVersion(d, entry.rowId, updated.updated_at);
       await db.syncQueue.delete(entry.seq!);
       return;
     }
-    const pulled = await getSupabase().from(entry.table).select('*').eq('id', entry.rowId) as
+    const pullQ = getSupabase().from(d.serverTable).select('*') as unknown as KeyFilterable;
+    const pulled = await applyServerKeyFilter(d, pullQ, entry.rowId) as unknown as
       { data: Record<string, unknown>[] | null; error: { message: string } | null };
     const serverRow = pulled.data?.[0];
     if (!serverRow) { await db.syncQueue.delete(entry.seq!); return; }
@@ -76,13 +88,14 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     if (conflictAttempts >= 3) { await moveToDeadLetter(entry, 'repeated conflict'); return; }
     const newExpected = serverRow.updated_at as string;
     await db.syncQueue.update(entry.seq!, { expectedServerVersion: newExpected, attempts: conflictAttempts });
-    await setLocalServerVersion(entry.table, entry.rowId, newExpected);
+    await setLocalServerVersion(d, entry.rowId, newExpected);
     const refreshed = (await db.syncQueue.get(entry.seq!))!;
     entries.unshift(refreshed);
     return;
   }
   if (entry.op === 'delete') {
-    let q = getSupabase().from(entry.table).update({ deleted_at: new Date().toISOString() }).eq('id', entry.rowId);
+    let q = getSupabase().from(d.serverTable).update({ deleted_at: new Date().toISOString() });
+    q = applyServerKeyFilter(d, q, entry.rowId);
     if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);
     const res = await q.select() as { data: unknown[] | null; error: { message: string } | null };
     if (res.error) throw new Error(res.error.message);
@@ -92,7 +105,8 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     }
     // Conditional missed — server moved since we pulled. Mirror the update path:
     // pull the current updated_at, advance expectedServerVersion, retry once.
-    const pulled = await getSupabase().from(entry.table).select('updated_at').eq('id', entry.rowId) as
+    const pullQ = getSupabase().from(d.serverTable).select('updated_at') as unknown as KeyFilterable;
+    const pulled = await applyServerKeyFilter(d, pullQ, entry.rowId) as unknown as
       { data: { updated_at: string }[] | null };
     const serverRow = pulled.data?.[0];
     if (!serverRow) { await db.syncQueue.delete(entry.seq!); return; }  // already gone server-side

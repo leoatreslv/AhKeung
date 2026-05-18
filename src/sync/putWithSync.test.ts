@@ -67,4 +67,13 @@ describe('putWithSync', () => {
   it('favoriteRowId round-trips through parseFavoriteRowId', () => {
     expect(parseFavoriteRowId(favoriteRowId('u', 'ex'))).toEqual({ userId: 'u', exerciseId: 'ex' });
   });
+
+  // Note on writability: every PR 0 descriptor has ownerField === userId
+  // (or, for favorites, the composite key includes userId), so the
+  // "row owned by someone else" guard inside putWithSync/deleteWithSync
+  // is structurally unreachable today. The guard exists for PR 1, where
+  // tables like `exercises` have ownerId independent of the PK and we
+  // need to refuse mutations on shared-in rows. The descriptor unit test
+  // covers the encoding side; an integration test for the guard ships
+  // with PR 1.
 });
