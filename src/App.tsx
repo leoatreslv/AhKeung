@@ -13,7 +13,7 @@ import { MyBundles } from './pages/MyBundles';
 import { BundleEditor } from './pages/BundleEditor';
 import { MyTrainees } from './pages/MyTrainees';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
-import { useT } from './i18n';
+import { useI18n } from './i18n';
 import { useAuth } from './auth/useAuth';
 import { Login } from './auth/Login';
 import { startSync, stopSync, flushNow } from './sync';
@@ -44,7 +44,14 @@ function App() {
 }
 
 function Shell() {
-  const t = useT();
+  const { t, locale } = useI18n();
+  const { profile, user } = useAuth();
+  // Prefer the saved display name; fall back to the local-part of email so
+  // the user always sees *something* about themselves in the header rather
+  // than just the app name. Locale-aware greeting so it doesn't say "Hi,"
+  // in a Chinese UI.
+  const name = profile?.displayName?.trim() || user?.email?.split('@')[0] || '';
+  const greeting = locale === 'zh-Hant' ? `${name} 你好` : `Hi, ${name}`;
   return (
     <div className="flex flex-col h-full max-w-md mx-auto bg-slate-900 text-slate-100">
       <header className="px-4 pt-6 pb-3 border-b border-slate-800 flex items-center gap-2 sticky top-0 z-10 bg-slate-900/95 backdrop-blur">
@@ -55,7 +62,9 @@ function Shell() {
         />
         <div className="flex-1 min-w-0">
           <h1 className="text-xl font-bold leading-none">{t.appName}</h1>
-          <span className="text-xs text-slate-400">{t.tagline}</span>
+          <span className="text-xs text-slate-400 truncate block">
+            {name ? greeting : t.tagline}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <LanguageSwitcher />
