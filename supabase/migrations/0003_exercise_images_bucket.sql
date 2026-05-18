@@ -43,15 +43,24 @@
 --     Target roles: authenticated
 --     USING expression: same expression as above.
 --
--- Then in Storage → exercise-images → Configuration:
---   File size limit:    2 MB
---   Allowed MIME types: image/jpeg, image/png, image/webp
+-- The bucket-level caps (2 MB size limit + image/* MIME allowlist) are
+-- applied via SQL below, so no manual Configuration step is required.
 
 -- ─── Bucket ───────────────────────────────────────────────────────────
 
 insert into storage.buckets (id, name, public)
   values ('exercise-images', 'exercise-images', true)
   on conflict (id) do nothing;
+
+-- Bucket-level safety nets. Reject uploads larger than 2 MB or with
+-- unexpected MIME types at the storage layer, regardless of which
+-- authorization layer the project uses. The client's resizeImage()
+-- produces ~80-200 KB JPEGs so legitimate uploads sail through this
+-- easily; the cap is defence in depth.
+update storage.buckets
+   set file_size_limit    = 2097152,  -- 2 MB
+       allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp']
+ where id = 'exercise-images';
 
 -- ─── Legacy RLS policies (only effective on "old" storage projects) ──
 -- Uses LIKE instead of storage.foldername() because storage.foldername
