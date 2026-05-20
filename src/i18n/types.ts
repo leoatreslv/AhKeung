@@ -232,19 +232,13 @@ export interface Translation {
 
   login: {
     byInvitationOnly: string;
-    useMagicLink: string;
-    usePassword: string;
     emailLabel: string;
     passwordLabel: string;
-    sendMagicLink: string;
     signIn: string;
     sendReset: string;
     sending: string;
     forgotPassword: string;
     backToSignIn: string;
-    checkEmail: string;
-    tapLinkHere: string;
-    differentEmail: string;
     resetSent: string;
     resetInstructions: string;
     noAccountYet: string;
