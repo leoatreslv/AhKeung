@@ -1,10 +1,17 @@
 # Operational logging + diagnostics
 
-**Status:** draft, not approved
+**Status:** approved 2026-05-19, ready to implement
 **Scope:** observable client + server activity so the next time something
 breaks ("trainee can't see invitations", "image upload stuck"), the path
 from "user reports it" to "I know exactly what happened" is minutes,
 not the multi-step debug-by-screenshot we've been doing.
+
+> **Revision note.** Open decisions resolved by the operator: log
+> levels = `info + warn + error` (no `debug` in the buffer); display
+> names are **never** masked (the operator needs to read "Leo" in
+> error logs to provide support); `audit_events` are emitted by
+> **both** triggers AND Edge Functions; buffer size stays at 500
+> entries (default).
 
 ## Why now
 
@@ -65,7 +72,7 @@ Four layers, each independently shippable.
 A single module `src/diagnostics/logger.ts`:
 
 ```ts
-type Level = 'debug' | 'info' | 'warn' | 'error';
+type Level = 'info' | 'warn' | 'error';
 
 interface LogEntry {
   ts: number;          // epoch ms
@@ -77,7 +84,6 @@ interface LogEntry {
 }
 
 export const log = {
-  debug(category: string, message: string, context?: Record<string, unknown>): void,
   info(category: string,  message: string, context?: Record<string, unknown>): void,
   warn(category: string,  message: string, context?: Record<string, unknown>): void,
   error(category: string, message: string, contextOrError?: unknown): void,
@@ -92,10 +98,19 @@ export function recentLog(limit = 500): Promise<LogEntry[]>;
 export function clearLog(): Promise<void>;
 ```
 
-Every `log.warn` / `log.error` mirrors to `console.warn` / `console.error`
-so dev-tools-in-hand inspection still works. `log.debug` and `log.info`
-write to the buffer only (not the console) so production console
-isn't noisy.
+Levels: `info` (user actions, successful state transitions, sync
+ticks), `warn` (recoverable problems — OCC conflict + retry, network
+hiccup), `error` (unrecoverable for this attempt — dead-letter,
+uncaught exception). `debug` is intentionally dropped: every existing
+debug-worthy event we have today rises to at least `info` (sync
+events, auth transitions, save outcomes), and keeping the buffer free
+of debug noise leaves room for ~500 *meaningful* entries instead of
+500 tick-by-tick traces.
+
+Every `log.warn` / `log.error` mirrors to `console.warn` /
+`console.error` so dev-tools-in-hand inspection still works.
+`log.info` writes to the buffer only (not the console) so production
+console isn't noisy.
 
 A separate module `src/diagnostics/install.ts` registers global
 handlers once at app boot:
@@ -231,18 +246,45 @@ create index audit_events_user on audit_events(user_id, created_at desc);
 create index audit_events_type on audit_events(event_type, created_at desc);
 ```
 
-Sources of events:
+Sources of events — **triggers + Edge Functions, both**. Triggers
+catch every row change (including ones we add to the app surface
+later without remembering to emit). Edge Functions add per-event
+context that the triggers can't see (e.g. the "already registered"
+branch of `invite-user` writes a single `invite.already_existed`
+event from inside the function, with the caller's IP / user-agent
+in metadata).
 
 - **Trigger on `invitations` INSERT/UPDATE** — emits `invite.sent`,
-  `invite.cancelled`, `invite.accepted`.
+  `invite.cancelled`, `invite.accepted`. Server-of-truth.
 - **Trigger on `trainer_trainees` INSERT/UPDATE** — emits
-  `designation.created`, `designation.accepted`, `designation.declined`.
-- **Trigger on `shares` INSERT/UPDATE** — emits `share.created`,
-  `share.revoked`.
-- **Trigger on `exercises` UPDATE (deleted_at)** — emits
-  `exercise.deleted`.
-- **Edge Functions** — `invite-user` writes a row directly when it
-  returns success.
+  `designation.created`, `designation.accepted`, `designation.declined`,
+  `designation.removed`.
+- **Trigger on `shares` INSERT/UPDATE (deleted_at flip)** — emits
+  `share.created`, `share.revoked`.
+- **Trigger on `exercises` UPDATE (deleted_at NULL→NOT NULL)** —
+  emits `exercise.deleted`.
+- **Trigger on `exercise_bundles` UPDATE (deleted_at)** — emits
+  `bundle.deleted`.
+- **`invite-user` Edge Function** — emits
+  `invite.already_existed` (the branch where Supabase rejects with
+  "user already registered") with `{ inviter, email_masked, ua }` in
+  metadata. The `invite.sent` event for fresh invites is emitted by
+  the trigger above; the function only writes the "already-in"
+  branch so we don't double-emit.
+- **`share-plan` RPC** — emits `plan.shared` with
+  `{ original_plan_id, cloned_plan_id, recipient, exercise_count }`.
+  Trigger-only would just see "new plans row inserted" without the
+  `original_plan_id` context.
+- **`promote_to_trainer` RPC** — emits `trainer.promoted` with
+  `{ promoter, promoted }`. Trigger can't see who did it (only that
+  `is_trainer` flipped).
+
+The trigger and function paths write to the same `audit_events`
+table; the `event_type` namespace tells them apart
+(`invite.sent` from a trigger vs `invite.already_existed` from the
+function vs `share.created` from a trigger). No coupling between
+the two — if a future trigger fires AND a function emits, the row
+just shows up twice with different event_types, both legitimate.
 
 RLS: same as `diagnostics_reports` — owner sees their own events;
 trainers see their trainees' events. Useful for "what happened to my
@@ -273,22 +315,28 @@ specific symptom → "look here" mappings.
 
 ## Privacy + safety
 
-What we log:
+What we log (in either diagnostics or audit_events):
 
-- User IDs (UUIDs) — yes, freely.
-- Timestamps, table names, error messages — yes.
-- Exercise IDs, plan IDs, share IDs — yes.
+- User IDs (UUIDs) — freely.
+- Timestamps, table names, error messages, error stacks.
+- Exercise IDs, plan IDs, share IDs.
+- **Display names — freely.** Operator-friendliness wins; "Leo
+  couldn't accept" is meaningfully different from
+  "7d46… couldn't accept" when reading a 100-line log.
 
-What we never log:
+What we never log (anywhere):
 
-- Passwords, JWTs, or any auth tokens.
-- Full email addresses (mask to `a***@example.com`).
-- Display names? Optional — leaning **mask in error logs but keep in
-  audit events** (the trainer needs to see "shared with Leo"; the
-  diagnostics dump doesn't).
+- Passwords, JWTs, refresh tokens, or any auth/session credentials.
+- Full email addresses — masked to `a***@example.com`. Emails are
+  the recoverable PII most likely to leak via a misplaced screenshot
+  of a diagnostics dump; user IDs are opaque, display names are
+  what people already share inside the app anyway.
 
-Logger has a `mask()` helper enforced for `email` and
-`display_name` fields by default.
+Logger exports a `maskEmail(s)` helper. The logger itself does NOT
+auto-redact arbitrary fields — call sites pass `maskEmail(user.email)`
+explicitly when an email needs to land in the context. Keeping
+masking explicit avoids the "automatic redactor stripped something
+useful" failure mode.
 
 ## Storage / volume
 
@@ -365,29 +413,35 @@ second class of issue this plan doesn't catch.
 4. **Audit log growth.** TTL job described above; if usage outpaces
    the 90-day rule, swap to a partitioned table by month (cheap
    migration when needed, not now).
-5. **Mask-by-default of display names** is currently inconsistent —
-   audit_events show names (operationally useful), diagnostics_reports
-   mask them. Document the asymmetry in the runbook.
-6. **No remote alerting.** If the dead-letter queue grows or an
+5. **No remote alerting.** If the dead-letter queue grows or an
    Edge Function starts failing, no one knows until a user reports
    it. v1.1: a daily cron RPC that scans dead-letter + emails the
    project owner on growth.
+6. **Diagnostics submitted via screenshot can leak masked-but-
+   contextual data.** Even with emails masked and no display-name
+   masking, a snippet of a screenshot shared in the wrong place
+   could expose trainer↔trainee relationships and exercise content.
+   Mitigation: the diagnostics panel's Copy button copies JSON
+   (not pretty-printed), making casual screenshotting harder than
+   plain text. The Send-to-support button uploads via TLS to a
+   table the recipient owns, no third-party hop.
 
 ## Open decisions
 
-Before I start on PR A, want your call on:
+All four locked by operator response on 2026-05-19:
 
-- **Buffer size**: 500 entries (~300 KB) vs 1000 (~600 KB) vs make
-  it user-configurable in Settings?
-- **Log levels in production**: log everything (debug + info + warn
-  + error) or only warn + error? Debug bloats the buffer; info is
-  useful for tracing actions. My default: `info + warn + error`
-  buffered, `debug` only when a `?debug=1` URL param is set.
-- **Mask display names in diagnostics?** I leaned yes; you may want
-  full names since the trainer support flow is "Leo says his app's
-  broken" → you'd want to see "Leo" in the log.
-- **Audit events: written by triggers or by Edge Functions?**
-  Triggers are more reliable (can't be bypassed). Edge Functions are
-  more flexible (can add custom metadata). My default: triggers
-  where possible, Edge Functions for the things they're already
-  doing (invite, share-plan RPC).
+- ✅ **Buffer size**: 500 entries / ~300 KB. User-configurable later
+  if needed.
+- ✅ **Log levels**: `info + warn + error` buffered; `debug` dropped
+  entirely (every event we'd want to debug rises to info or above).
+- ✅ **Display names**: **never masked** in either diagnostics or
+  audit_events. The operator-friendliness of reading "Leo couldn't
+  accept" trumps the marginal PII concern at beta scale. Emails
+  still masked everywhere via `maskEmail()`; call sites pass that
+  explicitly when an email goes into context.
+- ✅ **Audit events**: **both triggers and Edge Functions** write
+  rows. Triggers are the server-of-truth; Edge Functions add
+  per-event context (caller UA, original-plan-id on plan.shared,
+  promoter on trainer.promoted) that triggers can't see. No
+  double-emit because the trigger and function paths use distinct
+  `event_type` values.
