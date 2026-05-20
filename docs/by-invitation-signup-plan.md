@@ -1,9 +1,18 @@
 # By-invitation signup + onboarding
 
-**Status:** approved, ready to implement
+**Status:** revised after independent review, ready to implement
 **Scope:** close open self-signup, require invitation from an existing
 trainer for any new account, give first-time users a mandatory
 onboarding step where they pick a display name and set a password.
+
+> **Revision note.** This revision folds in all 4 blocking and 7
+> should-fix findings from the independent review at the foot of
+> this doc. The biggest change vs the original draft is the explicit
+> `verifyOtp` path in AuthProvider — the project's PKCE flow type
+> means server-issued links (invite, password-reset) don't
+> auto-consume the way `signInWithOtp` magic links do, so the
+> original draft's "lands on the app, auto-signed in" was wrong.
+> See the resolution log at the bottom for a per-finding trace.
 
 ## Background
 
@@ -58,22 +67,39 @@ trainer-curated app, that's wrong on two counts:
 3. Supabase emails the invitee an invitation link via your custom
    SMTP provider (already configured in your project — no Supabase
    email-rate limit applies).
-4. Invitee taps the link → lands on the app, auto-signed in, with
-   `user_metadata.invited_by` populated.
-5. Client detects "first-time user" (no `display_name` on the
-   `profiles` row) and routes to `<OnboardingScreen />` instead of
-   the main Shell:
+4. Invitee taps the link. The default invite URL carries
+   `?type=invite&token_hash=...`. **AuthProvider explicitly parses
+   these parameters** and calls
+   `supabase.auth.verifyOtp({ type: 'invite', token_hash })`,
+   which exchanges the token for a session. The PKCE flow type the
+   project uses (see `src/supabase.ts`) does NOT auto-consume
+   server-issued links because there's no client verifier — without
+   this explicit branch the link silently fails and the invitee
+   lands on Login with no signal. (See B1, B2 in the review.)
+5. After `verifyOtp` succeeds the URL is cleaned (`token_hash` +
+   `type` stripped, same way `?code=` is stripped today) and
+   AuthProvider transitions to `authenticated` with the new session.
+   `user_metadata.invited_by` is set; the new `profiles` row exists
+   (via the existing `handle_new_user` trigger) with `display_name`
+   still null.
+6. Client detects "first-time user" (profile fetched successfully
+   AND `display_name` is null) and routes to `<OnboardingScreen />`
+   instead of the main Shell:
    - Display name (required).
    - Password + confirm (required).
-6. On submit:
-   1. `update profiles set display_name = X where id = me`.
-   2. `supabase.auth.updateUser({ password })`.
+7. On submit (resilient against mid-flow crash — password first,
+   profile second; S6):
+   1. `supabase.auth.updateUser({ password })`. If this fails the
+      profile is still pristine and onboarding re-prompts on next
+      open.
+   2. `update profiles set display_name = X where id = me`.
    3. Refetch profile in AuthProvider.
    4. Navigate to `/`.
-7. Server-side trigger on `auth.users` insert only marks the matching
+8. Server-side trigger on `auth.users` insert marks the matching
    `invitations` row's `accepted_at = now()` for audit; **no
-   trainer_trainees row is created**.
-8. From here on, the trainee is a regular signed-in user with no
+   trainer_trainees row is created**. (Falls back to email-only
+   match if `invited_by` is missing, per W13.)
+9. From here on, the trainee is a regular signed-in user with no
    trainer attached. The inviting trainer (or any other trainer) can
    designate them through MyTrainees → search → designate, and the
    normal accept-via-banner flow takes over.
@@ -84,13 +110,20 @@ trainer-curated app, that's wrong on two counts:
 
 ```sql
 create table invitations (
-  id           uuid        primary key default gen_random_uuid(),
-  inviter_id   uuid        not null references profiles(id) on delete cascade,
-  email        text        not null,
-  created_at   timestamptz not null default now(),
-  expires_at   timestamptz not null default now() + interval '7 days',
-  accepted_at  timestamptz,
-  cancelled_at timestamptz,
+  id              uuid        primary key default gen_random_uuid(),
+  inviter_id      uuid        not null references profiles(id) on delete cascade,
+  email           text        not null,
+  created_at      timestamptz not null default now(),
+  expires_at      timestamptz not null default now() + interval '7 days',
+  accepted_at     timestamptz,
+  cancelled_at    timestamptz,
+  -- True when the invited email was already a registered user at the
+  -- time the trainer invited; in that case the invite-user Edge
+  -- Function records the row without sending an auth email and the
+  -- trainer's UI shows "Already had an account" rather than
+  -- "Accepted". Without this flag we'd have to overload `accepted_at`
+  -- and lose the distinction (S10).
+  already_existed boolean     not null default false,
   unique (inviter_id, email)
 );
 
@@ -119,21 +152,35 @@ declare
   inviter uuid;
   email_lc text;
 begin
-  inviter := (new.raw_user_meta_data->>'invited_by')::uuid;
-  if inviter is null then return new; end if;
-
-  -- Audit only. The trainer_trainees designation is intentionally
-  -- NOT created here: the inviting trainer may not end up as the
-  -- trainee's designated trainer, and forcing the link would
-  -- corrupt the existing pending → accept ceremony in MyTrainees.
   email_lc := lower(new.email);
+  -- Preferred attribution: the `invited_by` UUID written by the
+  -- Edge Function into raw_user_meta_data. Per B4, this path has
+  -- shifted across Supabase SDK versions and is user-writable
+  -- post-signup, so don't trust it as the only path.
+  inviter := nullif(new.raw_user_meta_data->>'invited_by', '')::uuid;
+
+  if inviter is not null then
+    update invitations
+       set accepted_at = coalesce(accepted_at, now())
+     where inviter_id = inviter
+       and lower(email) = email_lc
+       and accepted_at is null
+       and cancelled_at is null;
+  end if;
+
+  -- Fallback (W13): catch any other pending invitations for this
+  -- email so audit isn't lost when invited_by drifts or is missing.
+  -- coalesce() guards against overwriting an existing accepted_at.
   update invitations
-     set accepted_at = now()
-   where inviter_id = inviter
-     and lower(email) = email_lc
+     set accepted_at = coalesce(accepted_at, now())
+   where lower(email) = email_lc
      and accepted_at is null
      and cancelled_at is null;
 
+  -- Audit only. The trainer_trainees designation is intentionally
+  -- NOT created here: the inviting trainer may not end up as the
+  -- trainee's designated trainer, and forcing the link would corrupt
+  -- the existing pending → accept ceremony in MyTrainees.
   return new;
 end $$;
 
@@ -159,49 +206,163 @@ also keeps working.
 
 ## Edge Function `invite-user`
 
-```ts
-// supabase/functions/invite-user/index.ts
-// POST { email: string }
-//
-// - Verifies caller is a trainer via JWT (looks up profile.is_trainer).
-// - Rate-limits: 10 invites/day/trainer (counted via the invitations
-//   table itself — no extra storage).
-// - Inserts an invitations row (on-conflict-do-update for re-invite).
-// - Calls supabase.auth.admin.inviteUserByEmail with the trainer's
-//   id in user_metadata.invited_by.
-// - If the email is already registered, the admin call returns
-//   "user already registered"; the function catches that, records the
-//   invitation with accepted_at = now() (so it shows up as "already
-//   in" in the trainer's pending list), and returns success — the
-//   trainer can then designate the existing user normally.
-// - Returns { ok: true, invitationId } or { error: '...' }.
-```
+POST `{ email: string }`. Two Supabase clients in one function (per
+S8 in the review):
 
-Function secret: none — the runtime exposes `SUPABASE_SERVICE_ROLE_KEY`
-in the Edge Function context by default.
+- **User client** — created with the anon key + caller's
+  `Authorization` header forwarded. Used for `getUser()` and
+  `rpc('is_trainer')` so the trainer check runs *as the caller*
+  under RLS. The standard `Deno.env.get('SUPABASE_ANON_KEY')` and
+  forwarding `req.headers.get('Authorization')!` into
+  `global.headers` does the job.
+- **Admin client** — created with `SUPABASE_SERVICE_ROLE_KEY`
+  (exposed in the Edge runtime by default; no secret to set). Used
+  for `auth.admin.inviteUserByEmail`, the invitations-table
+  insert, and the rate-limit advisory lock.
+
+Function body, in order:
+
+1. **CORS preflight**. The Supabase function template doesn't
+   include OPTIONS handling — add it explicitly:
+   `if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });`.
+2. **Caller auth**. `getUser()` on the user client; reject with
+   401 if no user. `rpc('is_trainer')`; reject with 403 if false.
+3. **Rate limit (S9)**. Inside a transaction on the admin client:
+   `select pg_advisory_xact_lock(hashtext(<caller_id>::text));`
+   then `select count(*) from invitations where inviter_id =
+   <caller_id> and created_at > now() - interval '1 day' and
+   cancelled_at is null;`. If count ≥ 10, return 429. The advisory
+   lock collapses concurrent requests so they serialise on the
+   same lock id and can't race to "both see 9, both insert."
+4. **Admin invite**.
+   `supabase.auth.admin.inviteUserByEmail(email, { data: {
+   invited_by: callerId } })`.
+   - On success: continue to step 5.
+   - On `User already registered`: skip step 5's INSERT-as-pending
+     in favour of the "already-existed" path:
+     `insert ... values (..., accepted_at = now(), already_existed
+     = true) on conflict (inviter_id, email) do update set
+     already_existed = true, cancelled_at = null;`. Return 200
+     with `{ ok: true, alreadyExisted: true }`. The trainer's UI
+     surfaces this as an info chip ("already had an account —
+     designate via search").
+   - Other errors: surface as 500.
+5. **Record the invitation**. Upsert with explicit handling for
+   cancel/resend (S11):
+   ```sql
+   insert into invitations (inviter_id, email)
+     values ($1, $2)
+   on conflict (inviter_id, email) do update set
+       cancelled_at = null,
+       created_at   = now(),
+       expires_at   = now() + interval '7 days',
+       accepted_at  = case
+         when invitations.accepted_at is not null
+              then invitations.accepted_at
+         else null
+       end;
+   ```
+   This restores a cancelled row to active without losing the
+   original `accepted_at` if one was already set.
+6. **Return** `{ ok: true, invitationId, alreadyExisted: false }`.
+
+Resend = call this function again with the same email; the
+on-conflict branch is the resend path. No new row, fresh
+`created_at` / `expires_at`. The auth email is regenerated by
+`inviteUserByEmail`.
+
+Cancel: a separate function `cancel-invite(invitationId)` (or a
+direct authenticated UPDATE under the existing RLS that allows
+inviter to set `cancelled_at`) flips the column. Resend after
+cancel works via step 5's on-conflict.
 
 ## Client surfaces
 
+### AuthProvider URL handling for invite + recovery (B1, B2)
+
+The project's client uses `flowType: 'pkce'` (see `src/supabase.ts`).
+PKCE binds magic-link URLs to a verifier stored in the originating
+browser's localStorage, which is correct for `signInWithOtp` but
+**incompatible with server-issued links** (admin invite, password
+reset). Without a verifier the SDK can't auto-consume the URL, so
+the invite link silently lands on Login with no error.
+
+The fix is to teach AuthProvider to recognise the two server-link
+shapes and exchange them via `verifyOtp`:
+
+```ts
+// inside AuthProvider's bootstrap, before getSession():
+const params = new URLSearchParams(window.location.search);
+const tokenHash = params.get('token_hash');
+const type = params.get('type');  // 'invite' | 'recovery' | 'magiclink'
+
+if (tokenHash && (type === 'invite' || type === 'recovery')) {
+  const { error } = await supabase.auth.verifyOtp({
+    type: type as 'invite' | 'recovery',
+    token_hash: tokenHash,
+  });
+  // Clean the URL the same way the existing ?code= path does so a
+  // refresh doesn't re-attempt verifyOtp on a now-consumed token.
+  cleanQueryParams(['token_hash', 'type']);
+  if (error) {
+    // Render a friendly "this link is invalid or expired" page;
+    // user can request a new invite/reset from Login.
+    setError(t.auth.linkExpired);
+    return;
+  }
+  // verifyOtp populates the session; the existing getSession() path
+  // below will pick it up.
+}
+
+const { data: { session } } = await supabase.auth.getSession();
+// ... rest of existing bootstrap
+```
+
+The `type === 'recovery'` branch is what makes the
+`/reset-password` route work: after `verifyOtp` succeeds the user
+is signed in temporarily, the route's form calls
+`supabase.auth.updateUser({ password })`, and they're done.
+
 ### Onboarding screen (`/onboarding` — gated route)
 
-Detected by `AuthProvider`: after fetching the profile, if
-`profile.displayName` is null AND user is authenticated, the route
-tree renders `<OnboardingScreen />` instead of `<Shell />`.
+`AuthProvider` exposes a new `profileFetchError: string | null`
+alongside `status` and `profile`. The gate routes:
+
+| status | profile | profileFetchError | Render |
+|---|---|---|---|
+| `loading` | * | * | "Loading…" splash |
+| `unauthenticated` | * | * | `<Login />` |
+| `authenticated` | non-null & `displayName` set | * | `<Shell />` |
+| `authenticated` | non-null & `displayName == null` | `null` | `<OnboardingScreen />` |
+| `authenticated` | null | non-null | "Couldn't load profile — Retry" |
+| `authenticated` | null | null | shouldn't happen (the existing
+                                  `handle_new_user` trigger creates a
+                                  row on signup); treat as the error
+                                  case |
+
+This avoids the trap (S5) where a network failure made
+`profile === null` look like "first-time user."
 
 Form:
-- **Display name** input (required; non-empty).
-- **Password** input (required; min 8 chars, no other complexity
-  rules in v1).
+- **Display name** input (required; non-empty after trim).
+- **Password** input (required; min 8 chars; agree with Supabase
+  dashboard's minimum, see W14).
 - **Confirm password** input (must match).
 - **Submit** button — disabled until all three pass validation.
 
-On submit:
-1. `update profiles set display_name = X where id = me`.
-2. `supabase.auth.updateUser({ password })`.
+On submit (per S6, password before profile):
+1. `supabase.auth.updateUser({ password })`. On failure, surface
+   the error and stop — profile is still pristine, so onboarding
+   re-prompts on next open.
+2. `update profiles set display_name = X where id = me`.
 3. Refetch profile.
 4. Navigate to `/`.
 
-Not skippable — by design.
+Not skippable — by design. Recovery if the user closes the app
+mid-flow: magic link still works (the dashboard's "Allow new user
+sign-ups: off" flag only blocks *first* signup, not re-issuing a
+magic link to an existing-but-incomplete user — W12). Once they're
+back in, the gate re-routes them to onboarding.
 
 ### MyTrainees → "Invite by email" surface
 
@@ -237,12 +398,34 @@ onboarding.)
 Add a subtitle: "Invite-only — ask a trainer for an invitation."
 
 Add a **password sign-in** path alongside the existing magic-link
-form (since password is now mandatory, every user has one and may
-prefer it over checking email). Two visible toggles: "Magic link"
-(default) and "Password".
+form. Two visible toggles: "Magic link" (default) and "Password".
+The password tab is only for *returning* users (per S7) — every
+post-onboarding user has a password, so it works for everyone
+who's previously completed onboarding.
 
 Set `shouldCreateUser: false` on the `signInWithOtp` call — belt
 and suspenders since the dashboard flag also blocks it.
+
+**Error handling (per B3 / W15).** Today `Login.tsx` catches all
+errors with a single "Couldn't send the link" message. Add three
+explicit branches:
+
+```ts
+catch (err: unknown) {
+  const msg = err instanceof Error ? err.message : '';
+  if (/signups not allowed/i.test(msg) || /not found/i.test(msg)) {
+    setStatus(t.login.noAccountYet);     // "No account yet — ask a trainer for an invitation."
+  } else if (/rate limit/i.test(msg)) {
+    setStatus(t.login.rateLimited);      // "Too many requests — try again in a few minutes."
+  } else {
+    setStatus(t.login.linkFailed);       // Fallback: generic "Couldn't send the link."
+  }
+}
+```
+
+The message-sniffing is brittle (Supabase doesn't expose a stable
+code for "user not found on otp"), so the fallback string catches
+any future drift.
 
 ### Settings — "Change password"
 
@@ -283,72 +466,143 @@ New strings in `en` + `zh-Hant`:
 
 ## Execution plan (4 PRs)
 
-1. **PR A — Onboarding + password sign-in + dashboard flip.**
-   `<OnboardingScreen />` for first-time users (no `display_name`),
-   forms both display name and password. Login screen gains
-   password tab and "forgot password" link.
-   `/reset-password` route.
-   Dashboard switch happens at deploy time.
-2. **PR B — `invitations` table + Edge Function + audit trigger.**
-   Self-contained. Edge Function deploys via
-   `supabase functions deploy invite-user`.
+The dashboard flip ("Allow new user sign-ups: off") is bundled
+with PR B, not PR A — otherwise the gap between deploying A and B
+would leave nobody able to create accounts (O17). The AuthProvider
+URL handling for invite + recovery lands in PR A so existing users
+can use password reset on day one and the *infrastructure* is
+ready when PR B turns on closed signup.
+
+1. **PR A — AuthProvider URL handling + Onboarding + password
+   sign-in + reset-password.**
+   - `AuthProvider` learns to call `verifyOtp` for `?type=invite`
+     and `?type=recovery` URL params, with URL cleanup; new
+     `profileFetchError` state for the onboarding-gate state
+     machine.
+   - `<OnboardingScreen />` rendered when authenticated + profile
+     `displayName` is null AND fetch succeeded.
+   - `Login.tsx`: password tab, `shouldCreateUser: false`, the
+     three-branch error handling.
+   - `/reset-password` route outside the auth guard.
+   - No dashboard flip yet. Existing self-signup still works.
+2. **PR B — `invitations` table + `invite-user` Edge Function +
+   audit trigger + dashboard flip.**
+   - Migration `0006_invitations.sql`: table (with
+     `already_existed`), RLS, trigger, indexes.
+   - Edge Function deployed via `supabase functions deploy
+     invite-user`. Two-client pattern + CORS + advisory-lock rate
+     limit per S8/S9.
+   - **Deploy step:** flip Authentication → "Allow new user
+     sign-ups: off" in the dashboard. Document in the PR
+     description.
 3. **PR C — MyTrainees invite UI + pending invites section.**
-   Depends on B. Includes Cancel and Resend.
+   Depends on B. Includes Cancel and Resend. Surfaces
+   `already_existed` invites as "Already had an account" (chip,
+   not a CTA — trainer goes through search → designate for these).
 4. **PR D — Settings "Change password" section.** Polish; can ship
    anywhere after A.
 
 ## Tests
 
-- **Onboarding gate**: AuthProvider routes new user to onboarding
-  when `display_name` is null; routes them to Shell after submit.
-  Submit refuses missing password or mismatched confirm.
+- **Onboarding gate state machine** (S5): AuthProvider routes
+  new user to onboarding when fetched profile has `displayName ==
+  null`; routes to error-with-retry when profile fetch *failed*
+  (the trap the previous draft fell into); routes to Shell after
+  submit. Submit refuses missing password or mismatched confirm.
+- **Onboarding submit order** (S6): if `updateUser({ password })`
+  fails, `profiles.display_name` stays null and the gate
+  re-prompts on next render.
+- **AuthProvider URL handling** (B1/B2): given a URL with
+  `?type=invite&token_hash=…`, AuthProvider calls
+  `verifyOtp({ type: 'invite', … })` and strips the params on
+  success. Mocked Supabase client; assert against the verify
+  call and the cleaned URL.
 - **Invitation RLS**: trainer SELECTs own invites; non-trainer
   cannot; non-inviter cannot SELECT another trainer's invites.
 - **`invite-user` Edge Function**: deny for non-trainer caller;
-  rate-limit (11th invite in a day fails); on-conflict-do-update
-  for re-invites; "already registered" branch records the
-  invitation as accepted.
+  rate-limit (11th invite in a day fails *deterministically*
+  under concurrent access — exercise the advisory lock); the
+  re-invite-after-cancel path restores `cancelled_at = null` and
+  bumps `created_at`; "already registered" branch sets
+  `already_existed = true` and returns 200; CORS OPTIONS
+  preflight returns 200.
 - **Trigger**: invited signup marks matching `invitations` row
   `accepted_at = now()`; **does not** create a `trainer_trainees`
-  row.
-- **Login flow**: `signInWithOtp` with `shouldCreateUser: false`
-  rejects unknown email cleanly (UI message: "no account yet —
-  ask a trainer").
+  row. Fallback path (W13): if `invited_by` is missing from
+  metadata, all pending invitations for that lowercase email get
+  stamped.
+- **Login error sniffing** (B3): given a thrown
+  `AuthApiError: Signups not allowed for otp`, the friendly
+  message is "No account yet — ask a trainer for an invitation."
 - **Password sign-in**: existing user with password signs in via
-  `signInWithPassword`.
-- **Reset password**: existing user requests reset → email
-  delivered (covered by integration test against a fixture
-  inbox; out of scope for unit test suite — manual smoke).
+  `signInWithPassword`; AuthProvider transitions through
+  `applySession` once.
+- **Reset password** (manual smoke): existing user requests
+  reset → email delivered (custom SMTP); link with
+  `?type=recovery&token_hash=…` lands on `/reset-password` →
+  AuthProvider verifyOtp branch → `updateUser({ password })`
+  succeeds → navigate to `/`.
 
 ## Risks / open items
 
 1. **Inviting an already-registered user.** Supabase's
    `inviteUserByEmail` returns "User already registered". The
-   function catches it and inserts the invitation with
-   `accepted_at = now()` so the trainer's UI shows it as "already
-   in" rather than failing. The trainer then designates them via
-   the existing search → designate path.
-2. **Email deliverability.** You have a custom SMTP already
-   configured, so the Supabase auth-email rate-limit (3/hr on
-   free) is not a concern. Verify the templates in Dashboard →
-   Auth → Email Templates render correctly with your sender
-   identity.
-3. **Forgot-password flow needs a small new route.**
-   `/reset-password` lives outside the auth-guarded shell so
-   unauthenticated users can finish the reset. Plan to ship it as
-   part of PR A so password recovery is functional on day one.
+   function catches it and records the invitation with
+   `already_existed = true` (no `accepted_at` overwrite — preserves
+   audit). UI surfaces this as "Already had an account" and the
+   trainer designates them via the existing search → designate
+   path.
+2. **Email deliverability.** Your custom SMTP is configured, so
+   the Supabase Free auth-email rate limit isn't a concern.
+   Verify the templates in Dashboard → Auth → Email Templates
+   render correctly with your sender identity. **Important**:
+   the invite + recovery templates' redirect URL must point to
+   your Netlify origin, and the link template must include
+   `?type=invite&token_hash={{ .TokenHash }}` (likewise
+   `?type=recovery`). The current default templates already use
+   `token_hash`; verify before PR B deploy.
+3. **Forgot-password recovery route.** `/reset-password` lives
+   outside the auth-guarded shell so unauthenticated users can
+   finish the reset. AuthProvider's `?type=recovery` branch
+   verifies the OTP, the route's form calls
+   `updateUser({ password })`, the user is signed in afterwards.
+   Ships as part of PR A.
 4. **`invited_by` integrity.** The Edge Function uses
    `auth.uid()` from the verified JWT, not any client-supplied
    value, so a trainer cannot impersonate another inviter.
+   `raw_user_meta_data` is user-writable post-signup but by then
+   the audit row is already stamped (trigger ran during INSERT
+   on `auth.users`).
 5. **Invite expiry honour.** `expires_at` is informational only
    today. If hard expiry is wanted, add a check in
-   `handle_invited_signup` to reject the row update (and let
-   Supabase still create the user — they'd just lack an audit
-   link). Not v1.
-6. **Password complexity.** v1 enforces only "min 8 chars." If you
-   want stronger (mixed case, digits, symbols), tighten in the
-   onboarding validator. Supabase auth itself enforces nothing
-   beyond minimum length you set in the dashboard.
+   `handle_invited_signup` to refuse the audit-update if all
+   matching rows are expired, *and* have the Edge Function reject
+   re-invites that hit an expired-but-uncancelled row. Not v1.
+6. **Password complexity in two places** (W14). Supabase
+   dashboard has its own min-length and complexity sliders; the
+   client's "min 8 chars" check must agree or `updateUser` will
+   throw post-validation with a non-friendly error. Pin both at
+   8 chars / no complexity in v1; tighten later.
+7. **Stranded-onboarding recovery** (W12). A user who taps the
+   invite, signs in, but closes the app before completing
+   onboarding still has a confirmed auth.users row. They can come
+   back via magic link from Login (the dashboard's
+   "Allow new user sign-ups: off" flag only blocks *first* signup,
+   not magic links to existing users). On return, AuthProvider's
+   gate routes them back to OnboardingScreen because
+   `display_name` is still null.
+8. **No "Resend invite" rate limit** (O18). Spamming Resend
+   re-issues auth emails freely. v1 mitigation: Resend hits the
+   same 10/day bucket the function already enforces. v1.1: add a
+   per-row "last_resent_at" column and a minimum interval.
+9. **`profiles_write` self-elevation** (O16). 0004 tightened
+   profiles_write so users cannot flip their own `is_trainer`.
+   Verify the migration is applied to the live project before PR
+   B ships, because the entire invite system's threat model
+   assumes trainer status is privileged. If for any reason the
+   trainer-flag is still self-flippable, anyone signing up via
+   an invite link could then promote themselves and start
+   inviting others.
 
 ## Open decisions
 
@@ -551,7 +805,24 @@ per hour per invitation) or charge it to the same 10/day bucket.
 
 ### Resolution log
 
-To be filled in as items are addressed in subsequent PRs. Format:
-`B1 — resolved by …` or `S6 — accepted, scheduled PR …` or
-`O18 — deferred, tracked separately`.
+| Finding | Status | Where addressed |
+|---|---|---|
+| B1 | **Folded into design** | New "AuthProvider URL handling" section spells out the explicit `verifyOtp({ type: 'invite', token_hash })` path. Lands in PR A so the infrastructure is in place when PR B turns on closed signup. |
+| B2 | **Folded into design** | Same AuthProvider section: `?type=invite` / `?type=recovery` URL params are parsed, exchanged via `verifyOtp`, and stripped on success (mirroring the existing `?code=` cleanup). |
+| B3 | **Folded into design** | Login screen section's "Error handling" subsection gives the three-branch sniff (`Signups not allowed` → no-account; `rate limit` → throttled; fallback). |
+| B4 | **Folded into design** | Trigger now reads `invited_by` first and *also* runs a fallback `UPDATE` matching on lowercase email — audit isn't lost if the metadata path drifts across SDK versions. |
+| S5 | **Folded into design** | AuthProvider exposes `profileFetchError`; gate table distinguishes "first-time user" (profile fetched, displayName null) from "fetch failed" (error → retry). |
+| S6 | **Folded into design** | Onboarding submit order reversed: `updateUser({ password })` first, `profiles.display_name` second. Mid-flow crash leaves the gate intact for re-prompt. |
+| S7 | **Folded into design** | Login screen section notes the password tab is for returning users only. |
+| S8 | **Folded into design** | Edge Function section now specifies the two-client pattern (user client for caller-auth via `getUser` + `is_trainer` RPC; admin client for `inviteUserByEmail` and the table writes) plus CORS preflight. |
+| S9 | **Folded into design** | Rate limit uses `pg_advisory_xact_lock(hashtext(inviter_id::text))` inside the transaction; count excludes cancelled rows. |
+| S10 | **Folded into design** | `invitations` gains `already_existed boolean default false`. "Already registered" path sets that flag instead of stamping `accepted_at`, so audit shows the real distinction. |
+| S11 | **Folded into design** | Re-invite-after-cancel is explicit in the Edge Function pseudo-SQL: `on conflict do update` clears `cancelled_at`, bumps `created_at`/`expires_at`, preserves any existing `accepted_at` via `coalesce`. Cancel + Resend semantics spelled out. |
+| W12 | **Folded into design** | Risks #7: magic link is the stranded-onboarding recovery path; the dashboard flag doesn't block re-issuing magic links to existing-but-incomplete users. |
+| W13 | **Folded into design** | Trigger's email-only fallback handles the case where `invited_by` is missing. |
+| W14 | **Folded into design** | Risks #6 calls out the dashboard-min-length / client-validator pin. |
+| W15 | **Folded into design** | Login error sniff has the three-branch catch with a friendly fallback. |
+| O16 | **Re-verified in risks** | 0004 tightened `profiles_write`; risks #9 notes to verify on the live project before PR B ships. |
+| O17 | **Folded into PR sequencing** | Dashboard flip bundled with PR B (not PR A) so there's no gap during which account creation is fully broken. Documented in the PR B description. |
+| O18 | **Partially mitigated, flagged** | Resend uses the same 10/day bucket the invite path enforces, so spam still hits the rate limit. A per-row minimum interval is v1.1 (Risks #8). |
 
