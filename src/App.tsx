@@ -16,12 +16,17 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { useI18n } from './i18n';
 import { useAuth } from './auth/useAuth';
 import { Login } from './auth/Login';
+import { Onboarding } from './auth/Onboarding';
+import { ResetPassword } from './auth/ResetPassword';
 import { startSync, stopSync, flushNow } from './sync';
 
 function Guarded({ children }: { children: ReactNode }) {
-  const { status } = useAuth();
+  const { status, profile, profileFetchError, needsPasswordReset, refreshProfile } = useAuth();
+  const fullyReady = status === 'authenticated'
+    && !needsPasswordReset
+    && !!profile?.displayName;
   useEffect(() => {
-    if (status === 'authenticated') {
+    if (fullyReady) {
       startSync();
       // Kick an immediate flush so a fresh sign-in (e.g. after sign-out
       // wiped the local Dexie) pulls the user's server-side data right
@@ -29,9 +34,29 @@ function Guarded({ children }: { children: ReactNode }) {
       void flushNow();
       return () => stopSync();
     }
-  }, [status]);
+  }, [fullyReady]);
+
   if (status === 'loading') return <div className="p-6 text-slate-400">Loading…</div>;
   if (status === 'unauthenticated') return <Login />;
+  if (needsPasswordReset) return <ResetPassword />;
+  // Profile fetch failed and we have no cached profile to fall back on —
+  // don't auto-route to onboarding (would be wrong for an existing user
+  // who's just offline). Show a small retry surface instead.
+  if (profileFetchError && !profile) {
+    return (
+      <div className="p-6 max-w-sm mx-auto text-center text-slate-100">
+        <p className="text-rose-400 mb-3">Couldn't load your profile.</p>
+        <p className="text-slate-400 text-sm mb-6">{profileFetchError}</p>
+        <button
+          type="button"
+          onClick={() => void refreshProfile()}
+          className="px-4 py-2 bg-keung-600 hover:bg-keung-700 rounded-lg text-white"
+        >Retry</button>
+      </div>
+    );
+  }
+  // First-time user — profile fetched successfully but display_name is null.
+  if (profile && !profile.displayName) return <Onboarding />;
   return <>{children}</>;
 }
 

@@ -210,4 +210,52 @@ export interface Translation {
     block: string;
     blockConfirm: string;
   };
+
+  login: {
+    byInvitationOnly: string;
+    useMagicLink: string;
+    usePassword: string;
+    emailLabel: string;
+    passwordLabel: string;
+    sendMagicLink: string;
+    signIn: string;
+    sendReset: string;
+    sending: string;
+    forgotPassword: string;
+    backToSignIn: string;
+    checkEmail: string;
+    tapLinkHere: string;
+    differentEmail: string;
+    resetSent: string;
+    resetInstructions: string;
+    noAccountYet: string;
+    invalidPassword: string;
+    rateLimited: string;
+    linkFailed: string;
+  };
+
+  onboarding: {
+    title: string;
+    welcome: string;
+    displayNameLabel: string;
+    displayNamePlaceholder: string;
+    passwordLabel: string;
+    passwordConfirm: string;
+    passwordMismatch: string;
+    passwordTooShort: string;
+    submit: string;
+    submitting: string;
+    passwordSaveFailed: string;
+    profileSaveFailed: string;
+  };
+
+  resetPassword: {
+    title: string;
+    subtitle: string;
+    passwordLabel: string;
+    confirmLabel: string;
+    submit: string;
+    submitting: string;
+    failed: string;
+  };
 }
