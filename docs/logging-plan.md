@@ -445,3 +445,175 @@ All four locked by operator response on 2026-05-19:
   promoter on trainer.promoted) that triggers can't see. No
   double-emit because the trigger and function paths use distinct
   `event_type` values.
+
+---
+
+## Review (independent)
+
+An independent pass over this draft against the current code in
+`src/db.ts`, `src/sync/*`, `src/auth/AuthProvider.tsx`, and the
+existing migrations. Findings grouped by severity. The **Blocking**
+items are schema/SQL-level mistakes that would ship as wrong audit
+data — must be resolved before PR A starts.
+
+### Blocking
+
+**B1. Trigger double-emit on `invitations` INSERT.** The plan
+claims "distinct `event_type` values mean no double-emit," but the
+flow doesn't hold up. The Edge Function `invite-user` inserts a row
+into `invitations` in *both* branches — the fresh-invite branch
+(where Supabase emails the user) and the "already registered"
+branch (where it doesn't). The proposed trigger on `invitations`
+INSERT fires unconditionally and emits `invite.sent`. So an
+"already in" invite would emit BOTH `invite.sent` (from the
+trigger) AND `invite.already_existed` (from the function), making
+it look like Supabase sent an email when it didn't. **Fix**: have
+the trigger inspect `NEW.already_existed` and emit `invite.sent`
+only when false; otherwise emit nothing and let the function emit
+the `already_existed` event.
+
+**B2. Trigger context has no `auth.uid()`.** The plan's
+`audit_events.user_id` is meant to record "who did this," but when
+the trigger fires from a `service_role` insert (every `invite-user`
+call), `auth.uid()` is null inside the trigger context. If the
+trigger uses `auth.uid()` for `user_id`, every invitation event
+will have `user_id = null` — useless for audit. **Fix**: read the
+actor from `NEW.inviter_id`, `NEW.granter_id`, `NEW.trainer_id`
+etc. depending on the source table. Same fix applies to triggers
+on `shares` (use `NEW.granter_id`) and `trainer_trainees` (use
+`NEW.trainer_id` for create / `NEW.trainee_id` for trainee
+response — distinguish via the row's prior state).
+
+**B3. Ring-buffer trim semantics are unspecified.** "500 entries,
+auto-trim on insert" + a hand-wave at "debounce 250ms" in the
+risks doesn't constitute an implementation. Two concurrent emits
+(push worker + image upload sweep, both firing during a busy sync
+tick) racing on `count() + delete oldest` will either over-trim or
+leave the buffer growing past 500. **Fix**: pick one and write it
+down. Recommended: in-memory queue + debounced `bulkAdd` every
+~250 ms + post-batch prune by `ts < (now - 7d)` OR by row count.
+Or drop the "ring buffer" framing and call it a "periodic prune"
+with a once-per-minute housekeeping pass that runs in the existing
+sync orchestrator's tick.
+
+### Should-fix
+
+**S4. The buffer is wiped at exactly the worst time.** Risk #1
+acknowledges it but the v1 decision was "nuked, easier." Threat
+model is exactly backwards though: sign-out is what frustrated
+users do when something's broken. Losing the pre-signout buffer
+right before they want to file a report destroys the diagnostic
+value. **Fix**: give the logger its own Dexie database
+(`ah-keung-diagnostics`) that the existing `db.delete()` doesn't
+touch. Needs a "Clear all diagnostics" action in Settings since
+sign-out no longer does it — small UX cost, big debugging win.
+
+**S5. `diagnostics_reports` RLS is too permissive.** Plan says
+`SELECT user_id = auth.uid() OR is_trainer()`. W16 in the
+trainer-exercises doc already flagged "any trainer reads any
+user's data" as a beta-acceptable wide grant — but **diagnostics
+reports include the full client log**, which is materially more
+sensitive than display names or exercise rows. **Fix**: tighten the
+SELECT policy to `owner OR (trainer with an 'accepted'
+designation to this user via trainer_trainees)`. Apply the same
+tightening to `audit_events`.
+
+**S6. Email leak from "no automatic redactor."** The plan's
+reasoning for explicit `maskEmail()` is sound, but in practice any
+new contributor (or future-me) writes
+`log.warn('invite', 'failed', { email: user.email, ... })` once
+and ships an unmasked email. **Fix**: pick one enforcement layer.
+Smallest cost: an ESLint custom rule banning `email` as an
+unmasked context key. Stronger: a `MaskedEmail` branded type so
+`context.email` requires `maskEmail(…)`. Strongest: runtime warn
+in dev mode when the logger sees an `@` in any string-typed
+context field. Recommend ESLint rule.
+
+**S7. `info` to buffer-only is hostile in dev.** Production console
+quiet is good; dev console quiet means contributors lose grep-able
+event traces during local work. **Fix**: two lines —
+`if (import.meta.env.DEV) console.log(...)` for the `info` path.
+`warn`/`error` mirror policy stays.
+
+**S8. `audit_events` volume estimate is wrong by ~5×.** "100
+events/user/day at peak" doesn't square with the event list. Sync
+ticks alone (push every 30s, pull every 60s) emit ~3 events/min
+when active — call it 2 hours of active use → ~360/day from sync
+alone. With share, designate, invite, plan-edit on top,
+500–1000/day per user at peak is more realistic. With 100 users
+that's 50–100k rows/day → ~15–30 MB/day → ~1.5–2.5 GB at 90-day
+TTL. Still cheap, but the storage section's figures are off.
+**Recompute** and **actually write the TTL job** — the plan says
+"TTL job described above" but no SQL exists. Concrete: a `pg_cron`
+job (or Edge Function on a daily cron) that runs
+`delete from audit_events where created_at < now() - interval '90 days';`.
+
+**S9. Promote remote alerting from "v1.1 risk" to a real PR.** The
+entire plan exists because we keep discovering issues only when
+users complain. The most common silent breakage we've had — stuck
+dead-letter — happens to multiple users at once (it's a sync layer
+bug, not user-specific) and currently no observability surface
+tells the operator. A 30-line daily cron RPC that scans
+`sync_dead_letter` (and `audit_events` for error-type spikes) and
+emails the project owner above a threshold pays off the first time
+it fires. **Fix**: add as PR F in the execution plan, not a future
+risk.
+
+**S10. Stack trace truncation policy missing.** A deeply-nested
+rejected promise produces 50+ frames × ~80 chars ≈ 4 KB per
+entry. 30 errors in quick succession during a network blip pushes
+the buffer past 100 KB on stacks alone, displacing meaningful
+older entries. **Fix**: cap each `errorStack` at ~2 KB (or top-10
+frames) at log-write time.
+
+### Worth considering
+
+**W11. Categories as a typed const.** Plan says "codify them as a
+const" but doesn't show what. Concrete sketch worth adding to
+Layer 1:
+```ts
+export const CATEGORY = {
+  sync: 'sync', auth: 'auth', invite: 'invite',
+  share: 'share', exercise: 'exercise', onboarding: 'onboarding',
+  uncaught: 'uncaught',
+  'unhandled-rejection': 'unhandled-rejection',
+  'image-upload': 'image-upload',
+} as const;
+export type Category = typeof CATEGORY[keyof typeof CATEGORY];
+```
+Then `log.warn(c: Category, ...)`. Typo = compile error.
+
+**W12. "6-char short code" for diagnostics reports is undefined.**
+Plan returns "the new id (6-char short code)" from
+`submit-diagnostics`, but a UUID is 36 chars. Pick one: an extra
+`short_code` column (random base32, retried on unique conflict),
+or derive from the UUID's first 6 hex chars (collision space
+~16M — fine for hundreds of reports/year). Spell it out.
+
+**W13. Operator lookup path missing.** When a user says "report
+code XK7P3D" via Slack, how does the operator turn that into the
+actual log? A one-line SQL recipe in
+`docs/operational-runbook.md` (mentioned in the plan but
+undefined) makes this concrete:
+`select payload, notes from diagnostics_reports where short_code = 'XK7P3D';`.
+
+**W14. `audit_events.user_id` nullability is implicit.** The
+schema says `references profiles(id) on delete set null` so it's
+nullable. Document that `null` means "system event" (cron prune,
+etc.) and the trigger code must explicitly populate from
+`NEW.inviter_id` etc. for any human-attributable event.
+
+### Out of scope but flag
+
+**O15. PR-sequencing inversion in the user-visible UI.** PR A
+(logger) and PR B (call sites) are correctly ordered. PR C
+(panel) before PR D (Edge Function) means users *see* the panel
+with a "Send to support" button that doesn't work yet. Either
+ship D before C, or hide the Send button behind a build-time
+feature flag until D lands.
+
+### Resolution log
+
+To be filled in as items are addressed in subsequent PRs. Format:
+`B1 — resolved by …` or `S6 — accepted, scheduled PR …` or
+`O15 — deferred, tracked separately`.
