@@ -76,6 +76,95 @@ periodically:
 delete from audit_events where created_at < now() - interval '90 days';
 ```
 
+## `alert-scan` daily threshold check
+
+Edge Function `alert-scan` (PR E) scans `audit_events` over the
+last 24h and emails a summary if either threshold is tripped:
+
+- `sync.dead_letter` events ≥ `ALERT_DEAD_LETTER_THRESHOLD` (default **5**)
+- `*.failed` events ≥ `ALERT_FAILED_THRESHOLD` (default **10**)
+
+### One-time setup
+
+1. Deploy the function:
+   ```bash
+   supabase functions deploy alert-scan
+   ```
+2. Set SMTP + recipient secrets (reuse the project's existing SMTP
+   creds — they're the same ones Auth uses for invite emails):
+   ```bash
+   supabase secrets set \
+     ALERT_SMTP_HOST=smtp.example.com \
+     ALERT_SMTP_PORT=587 \
+     ALERT_SMTP_USER=apikey \
+     ALERT_SMTP_PASS=... \
+     ALERT_FROM=alerts@your-domain.com \
+     ALERT_TO=ops@your-domain.com
+   ```
+   Override thresholds with `ALERT_DEAD_LETTER_THRESHOLD` /
+   `ALERT_FAILED_THRESHOLD` if the defaults are too noisy.
+3. Schedule it. Two options:
+
+   **Option A — `pg_cron` + `pg_net`** (preferred if both
+   extensions are available; both ship with Supabase Pro+):
+
+   ```sql
+   -- Stash the service-role key in a Postgres setting so the cron
+   -- body doesn't bake it into the schedule definition. Run once
+   -- in the SQL editor:
+   alter database postgres
+     set app.service_role_key = '<your service role JWT>';
+
+   select cron.schedule(
+     'daily-alert-scan',
+     '0 9 * * *',
+     $$
+       select net.http_post(
+         url     := 'https://<project-ref>.supabase.co/functions/v1/alert-scan',
+         headers := jsonb_build_object(
+           'Authorization', 'Bearer ' || current_setting('app.service_role_key', true),
+           'Content-Type',  'application/json'
+         )
+       );
+     $$
+   );
+   ```
+
+   **Option B — GitHub Actions cron** (works on any tier):
+
+   ```yaml
+   # .github/workflows/alert-scan.yml
+   name: alert-scan
+   on:
+     schedule: [{ cron: '0 9 * * *' }]
+   jobs:
+     ping:
+       runs-on: ubuntu-latest
+       steps:
+         - run: |
+             curl -X POST \
+               -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+               https://<project-ref>.supabase.co/functions/v1/alert-scan
+   ```
+
+### Manual verification
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+  https://<project-ref>.supabase.co/functions/v1/alert-scan
+```
+
+Returns JSON `{ ok, deadLetterCount, failedCount, alerted, triggers? }`.
+If counts are below thresholds, no email is sent.
+
+### Threshold tuning
+
+5 dead-letters in 24h is the floor at which "this is a class of bug,
+not a one-off." `*.failed` events don't exist yet in v1's audit
+vocabulary — the 10-event threshold is forward-compatible for when
+future emits use the `.failed` suffix.
+
 ## Where to find Supabase's own logs
 
 Most operational issues we've hit ARE visible in the dashboard

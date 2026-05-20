@@ -203,4 +203,16 @@ async function moveToDeadLetter(entry: SyncQueueRow, reason: string): Promise<vo
   log.error(CATEGORY.sync, 'moved to dead letter', {
     table: entry.table, rowId: entry.rowId, op: entry.op, reason,
   });
+  // Fire-and-forget audit emit. Failure here must not throw — the
+  // local dead-letter has already been recorded and the diagnostics
+  // logger captured the error. PR E's alert-scan cron reads from
+  // audit_events.
+  void getSupabase()
+    .rpc('record_dead_letter', {
+      p_table:  entry.table,
+      p_row_id: String(entry.rowId),
+      p_op:     entry.op,
+      p_reason: reason,
+    })
+    .then(undefined, () => { /* swallow */ });
 }

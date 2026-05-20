@@ -170,6 +170,14 @@ export function createFakeSupabase() {
       async signOut() { session = null; notify('SIGNED_OUT'); return { error: null }; },
     },
     from(name: string) { return builder(name); },
+    // Best-effort RPC stub. Real RPCs (share_plan, record_dead_letter,
+    // etc.) are exercised end-to-end against the real DB; in unit
+    // tests we just want the fire-and-forget calls in client code
+    // not to crash.
+    async rpc(_name: string, _args?: unknown): Promise<QueryResult> {
+      void _name; void _args;
+      return { data: null, error: null };
+    },
     storage: {
       from(bucket: string) {
         return {
