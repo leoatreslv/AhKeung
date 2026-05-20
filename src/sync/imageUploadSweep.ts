@@ -9,6 +9,8 @@
 
 import { getSupabase } from '../supabase';
 import { db } from '../db';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 
 export async function runImageUploadSweep(): Promise<void> {
   const { data: { session } } = await getSupabase().auth.getSession();
@@ -29,14 +31,18 @@ export async function runImageUploadSweep(): Promise<void> {
         upsert: true,
       });
     if (res.error) {
-      // Leave the row alone; the next sweep retries. Surface in console for
-      // diagnostics; the sync orchestrator already wraps in safeRun.
-      console.warn('[image upload]', ex.id, res.error.message);
+      // Leave the row alone; the next sweep retries. Logged as error so
+      // the diagnostics dump shows what the sweep tried and why it
+      // failed (storage RLS issues, MIME-type mismatch, size-cap hit).
+      log.error(CATEGORY['image-upload'], 'storage upload failed', {
+        id: ex.id, path, message: res.error.message,
+      });
       continue;
     }
     await db.exercises.update(ex.id, {
       imagePath: path,
       pendingImageBlob: undefined,
     });
+    log.info(CATEGORY['image-upload'], 'uploaded', { id: ex.id, path });
   }
 }

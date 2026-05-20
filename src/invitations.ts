@@ -3,6 +3,8 @@
 // direct UPDATE under the column-level grant in migration 0006.
 
 import { getSupabase } from './supabase';
+import { log } from './diagnostics/logger';
+import { CATEGORY } from './diagnostics/categories';
 
 export interface InviteResult {
   ok: boolean;
@@ -26,8 +28,13 @@ export async function inviteByEmail(email: string): Promise<InviteResult> {
       if (json) body = json;
     } catch { /* ignore — the function may have returned a non-JSON body */ }
     const msg = body?.error ?? (error as FunctionsHttpError).message ?? 'invite failed';
+    log.error(CATEGORY.invite, 'failed', { message: msg });
     return { ok: false, error: msg };
   }
+  log.info(CATEGORY.invite, 'sent', {
+    alreadyExisted: data?.alreadyExisted ?? false,
+    invitationId: data?.invitationId,
+  });
   return data ?? { ok: false, error: 'no response' };
 }
 
@@ -35,5 +42,9 @@ export async function cancelInvitation(id: string): Promise<void> {
   const { error } = await getSupabase().from('invitations')
     .update({ cancelled_at: new Date().toISOString() })
     .eq('id', id) as { error: { message: string } | null };
-  if (error) throw new Error(error.message);
+  if (error) {
+    log.error(CATEGORY.invite, 'cancel failed', { id, message: error.message });
+    throw new Error(error.message);
+  }
+  log.info(CATEGORY.invite, 'cancelled', { id });
 }

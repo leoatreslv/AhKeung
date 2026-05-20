@@ -7,6 +7,8 @@ import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
 import { resizeImage } from '../imageResize';
 import { imageUrl } from '../exerciseDisplay';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -96,6 +98,9 @@ export function ExerciseEditor() {
     if (pickedImage) {
       await db.exercises.update(newId, { pendingImageBlob: pickedImage });
     }
+    log.info(CATEGORY.exercise, id ? 'updated' : 'created', {
+      id: newId, hadImage: !!pickedImage,
+    });
     navigate('/exercises');
   }
 
@@ -112,6 +117,7 @@ export function ExerciseEditor() {
       await deleteWithSync('exerciseBundleItems', m.bundleId, m.exerciseId);
     }
     await deleteWithSync('exercises', id);
+    log.info(CATEGORY.exercise, 'deleted', { id, bundlesAffected: memberships.length });
     navigate('/exercises');
   }
 

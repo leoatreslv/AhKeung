@@ -8,6 +8,8 @@ import {
   type KeyFilterable,
   type TableDescriptor,
 } from './descriptors';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 
 async function localRowFor(entry: SyncQueueRow): Promise<Record<string, unknown> | undefined> {
   const d = descriptorFor(entry.table);
@@ -119,6 +121,9 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     await setLocalServerVersion(d, entry.rowId, newExpected);
     const refreshed = (await db.syncQueue.get(entry.seq!))!;
     entries.unshift(refreshed);
+    log.warn(CATEGORY.sync, 'OCC conflict, retrying', {
+      table: entry.table, rowId: entry.rowId, attempts: conflictAttempts,
+    });
     return;
   }
   if (entry.op === 'delete') {
@@ -191,5 +196,11 @@ async function moveToDeadLetter(entry: SyncQueueRow, reason: string): Promise<vo
   await db.transaction('rw', db.syncQueue, db.syncDeadLetter, async (tx) => {
     await tx.table('syncDeadLetter').add({ ...entry, seq: undefined, lastError: reason, movedAt: Date.now() });
     await tx.table('syncQueue').delete(entry.seq!);
+  });
+  // Dead-lettering is the canary for "a class of bug ships in production"
+  // — surface every one so the diagnostics dump and PR E's remote-alert
+  // cron both pick it up.
+  log.error(CATEGORY.sync, 'moved to dead letter', {
+    table: entry.table, rowId: entry.rowId, op: entry.op, reason,
   });
 }

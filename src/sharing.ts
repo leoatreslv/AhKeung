@@ -13,6 +13,8 @@
 import { getSupabase } from './supabase';
 import { db, type ShareResourceType } from './db';
 import { putWithSync, deleteWithSync } from './sync/putWithSync';
+import { log } from './diagnostics/logger';
+import { CATEGORY } from './diagnostics/categories';
 
 export async function shareResource(
   resourceType: 'exercise' | 'bundle',
@@ -38,10 +40,12 @@ export async function shareResource(
     resourceId,
     createdAt: Date.now(),
   }, granterId);
+  log.info(CATEGORY.share, 'created', { type: resourceType, resourceId, recipientId });
 }
 
 export async function unshareResource(shareId: string): Promise<void> {
   await deleteWithSync('shares', shareId);
+  log.info(CATEGORY.share, 'revoked', { shareId });
 }
 
 /** Calls the share_plan RPC. Server clones the plan into the trainee's
@@ -53,8 +57,15 @@ export async function sharePlan(planId: string, recipientId: string): Promise<st
     plan_id: planId,
     recipient: recipientId,
   }) as { data: string | null; error: { message: string } | null };
-  if (res.error) throw new Error(res.error.message);
-  if (!res.data) throw new Error('share_plan returned no id');
+  if (res.error) {
+    log.error(CATEGORY.share, 'sharePlan failed', { planId, recipientId, message: res.error.message });
+    throw new Error(res.error.message);
+  }
+  if (!res.data) {
+    log.error(CATEGORY.share, 'sharePlan returned no id', { planId, recipientId });
+    throw new Error('share_plan returned no id');
+  }
+  log.info(CATEGORY.share, 'plan shared', { originalPlanId: planId, clonedPlanId: res.data, recipientId });
   return res.data;
 }
 
@@ -64,5 +75,9 @@ export async function sharePlan(planId: string, recipientId: string): Promise<st
 export async function promoteToTrainer(target: string): Promise<void> {
   const res = await getSupabase().rpc('promote_to_trainer', { target }) as
     { error: { message: string } | null };
-  if (res.error) throw new Error(res.error.message);
+  if (res.error) {
+    log.error(CATEGORY.auth, 'promote failed', { target, message: res.error.message });
+    throw new Error(res.error.message);
+  }
+  log.info(CATEGORY.auth, 'promoted', { target });
 }

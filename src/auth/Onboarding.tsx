@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { getSupabase } from '../supabase';
 import { useAuth } from './useAuth';
 import { useI18n } from '../i18n';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 
 const MIN_PASSWORD = 8;
 
@@ -28,6 +30,7 @@ export function Onboarding() {
       const { error: pwError } = await getSupabase().auth.updateUser({ password });
       if (pwError) {
         setStatus(`${t.onboarding.passwordSaveFailed}: ${pwError.message}`);
+        log.error(CATEGORY.onboarding, 'password save failed', { message: pwError.message });
         return;
       }
       // Profile second. RLS lets the user update their own row.
@@ -36,8 +39,10 @@ export function Onboarding() {
         .eq('id', user.id) as { error: { message: string } | null };
       if (profileError) {
         setStatus(`${t.onboarding.profileSaveFailed}: ${profileError.message}`);
+        log.error(CATEGORY.onboarding, 'profile save failed', { message: profileError.message });
         return;
       }
+      log.info(CATEGORY.onboarding, 'complete');
       await refreshProfile();
       // Once profile.displayName is populated the gate flips and Shell
       // renders. No explicit navigate needed.

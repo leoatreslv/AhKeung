@@ -1,13 +1,15 @@
 import { runPushOnce } from './pushWorker';
 import { runPullOnce } from './pullWorker';
 import { runImageUploadSweep } from './imageUploadSweep';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 
 let pushTimer: ReturnType<typeof setInterval> | null = null;
 let pullTimer: ReturnType<typeof setInterval> | null = null;
 let listeners: { event: string; handler: () => void }[] = [];
 
 async function safeRun(fn: () => Promise<void>): Promise<void> {
-  try { await fn(); } catch (e) { console.warn('[sync]', e); }
+  try { await fn(); } catch (e) { log.error(CATEGORY.sync, 'tick failed', e); }
 }
 
 // Image upload always runs immediately before push: when the sweep

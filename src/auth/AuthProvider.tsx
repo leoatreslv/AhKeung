@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { getSupabase } from '../supabase';
 import { db } from '../db';
 import { stopSync, flushNow } from '../sync';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 import { AuthContext, type AuthState, type Profile } from './useAuth';
 
 const LAST_PROFILE_KEY = 'ahKeung.lastKnownProfile';
@@ -54,7 +56,11 @@ async function consumeAuthLink(): Promise<'invite' | 'recovery' | null> {
   url.searchParams.delete('type');
   window.history.replaceState({}, '', url.pathname + url.search + url.hash);
 
-  if (error) return null;
+  if (error) {
+    log.error(CATEGORY.auth, 'verifyOtp failed', { type, message: error.message });
+    return null;
+  }
+  log.info(CATEGORY.auth, 'verifyOtp ok', { type });
   return type;
 }
 
@@ -116,6 +122,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
         }
         if (!profile) profileFetchError = e instanceof Error ? e.message : 'profile fetch failed';
+        log.warn(CATEGORY.auth, 'profile fetch failed', {
+          message: e instanceof Error ? e.message : String(e),
+          usedCache: !!profile,
+        });
       }
       if (cancelled) return;
       userIdRef.current = session.user.id;

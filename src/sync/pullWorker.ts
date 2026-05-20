@@ -2,6 +2,8 @@ import { getSupabase } from '../supabase';
 import { db, type SyncTableName } from '../db';
 import { fromServerRow } from './mapping';
 import { getCursor, setCursor } from './syncMeta';
+import { log } from '../diagnostics/logger';
+import { CATEGORY } from '../diagnostics/categories';
 import {
   DESCRIPTORS,
   rowIdFromServerRow,
@@ -104,6 +106,7 @@ export async function runPullOnce(): Promise<void> {
       const rows = res.data ?? [];
       if (rows.length === 0) break;
 
+      log.info(CATEGORY.sync, 'pulled page', { table, rows: rows.length });
       let processed = 0;
       for (const r of rows) {
         const key = rowIdFromServerRow(d, r);
