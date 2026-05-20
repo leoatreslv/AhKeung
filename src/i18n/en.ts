@@ -280,4 +280,14 @@ export const en: Translation = {
     submitting: 'Saving…',
     failed: 'Couldn\'t save password',
   },
+
+  settings: {
+    changePassword: 'Change password',
+    newPassword: 'New password',
+    confirmPassword: 'Confirm new password',
+    saveButton: 'Save',
+    saving: 'Saving…',
+    passwordSaved: 'Password updated.',
+    passwordSaveFailed: 'Update failed',
+  },
 };

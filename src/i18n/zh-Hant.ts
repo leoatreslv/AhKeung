@@ -280,4 +280,14 @@ export const zhHant: Translation = {
     submitting: '儲存中…',
     failed: '密碼儲存失敗',
   },
+
+  settings: {
+    changePassword: '更改密碼',
+    newPassword: '新密碼',
+    confirmPassword: '確認新密碼',
+    saveButton: '儲存',
+    saving: '儲存中…',
+    passwordSaved: '密碼已更新。',
+    passwordSaveFailed: '更新失敗',
+  },
 };

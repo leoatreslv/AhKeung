@@ -277,4 +277,14 @@ export interface Translation {
     submitting: string;
     failed: string;
   };
+
+  settings: {
+    changePassword: string;
+    newPassword: string;
+    confirmPassword: string;
+    saveButton: string;
+    saving: string;
+    passwordSaved: string;
+    passwordSaveFailed: string;
+  };
 }
