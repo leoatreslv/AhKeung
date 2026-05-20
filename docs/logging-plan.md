@@ -1,17 +1,31 @@
 # Operational logging + diagnostics
 
-**Status:** approved 2026-05-19, ready to implement
+**Status:** revised after independent review, ready to implement
 **Scope:** observable client + server activity so the next time something
 breaks ("trainee can't see invitations", "image upload stuck"), the path
 from "user reports it" to "I know exactly what happened" is minutes,
 not the multi-step debug-by-screenshot we've been doing.
 
-> **Revision note.** Open decisions resolved by the operator: log
-> levels = `info + warn + error` (no `debug` in the buffer); display
-> names are **never** masked (the operator needs to read "Leo" in
-> error logs to provide support); `audit_events` are emitted by
-> **both** triggers AND Edge Functions; buffer size stays at 500
-> entries (default).
+> **Revision note.** This revision folds in all 3 blocking + 7
+> should-fix findings from the independent review at the foot of
+> this doc. The biggest shape changes:
+> - Logger now lives in **its own Dexie database**
+>   (`ah-keung-diagnostics`) so sign-out doesn't wipe it (S4).
+> - Audit-event triggers explicitly read the actor from `NEW.*`
+>   columns and gate on `NEW.already_existed` to avoid double-emit
+>   (B1, B2).
+> - Ring-buffer trim has a concrete algorithm: in-memory queue +
+>   debounced bulkAdd + prune-by-count (B3).
+> - `diagnostics_reports` and `audit_events` RLS tightened to
+>   "owner OR designated-trainer," not the broader `is_trainer()`
+>   (S5).
+> - Storage/volume figures recomputed (S8); `pg_cron` TTL job
+>   written out.
+> - Remote alerting promoted from "v1.1 risk" to **PR F** (S9).
+>
+> Operator decisions still locked: log levels = `info + warn +
+> error`; display names never masked; audit events from both
+> triggers + Edge Functions; buffer size 500.
 
 ## Why now
 
@@ -69,48 +83,95 @@ Four layers, each independently shippable.
 
 ### Layer 1 — Client structured logger + ring buffer
 
-A single module `src/diagnostics/logger.ts`:
+Two modules: a typed Category const and the logger itself.
 
 ```ts
+// src/diagnostics/categories.ts
+export const CATEGORY = {
+  sync: 'sync', auth: 'auth', invite: 'invite',
+  share: 'share', exercise: 'exercise', bundle: 'bundle',
+  onboarding: 'onboarding', settings: 'settings',
+  uncaught: 'uncaught', 'unhandled-rejection': 'unhandled-rejection',
+  'image-upload': 'image-upload',
+} as const;
+export type Category = typeof CATEGORY[keyof typeof CATEGORY];
+```
+
+`log.warn(c: Category, …)` — a typo in the category becomes a
+compile error rather than fragmenting the buffer's vocabulary (W11).
+
+```ts
+// src/diagnostics/logger.ts
 type Level = 'info' | 'warn' | 'error';
 
 interface LogEntry {
   ts: number;          // epoch ms
   level: Level;
-  category: string;    // 'sync' | 'auth' | 'invite' | 'exercise' | …
+  category: Category;
   message: string;
   context?: Record<string, unknown>;  // structured fields
-  errorStack?: string; // captured when level === 'error' + Error supplied
+  errorStack?: string; // captured when an Error is supplied to log.error
 }
 
 export const log = {
-  info(category: string,  message: string, context?: Record<string, unknown>): void,
-  warn(category: string,  message: string, context?: Record<string, unknown>): void,
-  error(category: string, message: string, contextOrError?: unknown): void,
+  info(category: Category,  message: string, context?: Record<string, unknown>): void,
+  warn(category: Category,  message: string, context?: Record<string, unknown>): void,
+  error(category: Category, message: string, contextOrError?: unknown): void,
 };
-
-// Buffer lives in a dedicated Dexie store `diagnostics_log` with the
-// existing AhKeungDB instance — bumps to v6 (schema-only, no data
-// migration). Ring-buffer kept at 500 entries (auto-trim on insert).
-// Estimated footprint: ~200–400 KB. Cap visible to the user.
 
 export function recentLog(limit = 500): Promise<LogEntry[]>;
 export function clearLog(): Promise<void>;
 ```
 
-Levels: `info` (user actions, successful state transitions, sync
-ticks), `warn` (recoverable problems — OCC conflict + retry, network
-hiccup), `error` (unrecoverable for this attempt — dead-letter,
-uncaught exception). `debug` is intentionally dropped: every existing
-debug-worthy event we have today rises to at least `info` (sync
-events, auth transitions, save outcomes), and keeping the buffer free
-of debug noise leaves room for ~500 *meaningful* entries instead of
-500 tick-by-tick traces.
+**Storage location (S4):** the buffer lives in its **own** Dexie
+database (`ah-keung-diagnostics`), NOT in the existing `ah-keung`
+DB. That isolation is the entire point — the existing sign-out
+handler does `db.delete()` on `ah-keung` to wipe user data, but the
+diagnostics DB is untouched, so the buffer survives sign-out (the
+common act-of-frustration that immediately precedes "let me file a
+support report"). Settings → Diagnostics gets an explicit
+**Clear all diagnostics** action so the user retains control.
+Schema:
 
-Every `log.warn` / `log.error` mirrors to `console.warn` /
-`console.error` so dev-tools-in-hand inspection still works.
-`log.info` writes to the buffer only (not the console) so production
-console isn't noisy.
+```
+ah-keung-diagnostics:
+  diagnostics_log: ++seq, ts
+```
+
+Auto-increment seq for stable ordering even on equal `ts`; `ts`
+indexed so the prune query (`where ts < cutoff`) is cheap.
+
+**Ring-buffer trim (B3).** No race-prone "count + delete oldest on
+every insert" pattern. Instead:
+
+1. **In-memory queue.** Every `log.*` call appends to a module-level
+   `pending: LogEntry[]` array — pure JS, single-threaded, no race.
+2. **Debounced flush** every 250 ms (or immediately on `pending.length
+   >= 50` so a sudden error storm doesn't sit in memory). Flush =
+   one `db.diagnostics_log.bulkAdd(pending.splice(0))` transaction.
+3. **Post-flush prune.** After bulkAdd, if the table count exceeds
+   500, delete the oldest rows by `seq` until count = 500. Done in
+   the same transaction. One concurrent flusher only — a `flushing`
+   guard skips re-entry; the next interval picks up anything that
+   queued during the flush.
+
+The 250 ms debounce also addresses iOS Safari's slow IndexedDB
+writes under memory pressure (risk #2 in the original) — never
+more than 4 transactions/sec regardless of emit rate.
+
+**Levels & dev-mode mirror (S7).**
+- `info` — user actions, successful state transitions, sync ticks.
+  Buffered. In dev (`import.meta.env.DEV`), also mirrored to
+  `console.log` so contributors see the live trace.
+- `warn` — recoverable problems (OCC conflict + retry, network
+  hiccup). Buffered AND mirrored to `console.warn` always.
+- `error` — unrecoverable for this attempt (dead-letter, uncaught
+  exception). Buffered AND mirrored to `console.error` always.
+
+**Stack truncation (S10).** When an `Error` is passed to
+`log.error`, capture `.stack` but truncate to the first 2 KB (or
+top 10 frames, whichever is shorter). A noisy error storm during a
+network blip can't burn the buffer on multi-KB stack traces.
 
 A separate module `src/diagnostics/install.ts` registers global
 handlers once at app boot:
@@ -180,32 +241,68 @@ New table `diagnostics_reports`:
 
 ```sql
 create table diagnostics_reports (
-  id          uuid        primary key default gen_random_uuid(),
-  user_id     uuid        not null references profiles(id) on delete cascade,
+  id           uuid        primary key default gen_random_uuid(),
+  short_code   text        not null unique,  -- 6-char base32, user-readable
+  user_id      uuid        not null references profiles(id) on delete cascade,
   submitted_at timestamptz not null default now(),
-  app_version text,             -- git sha, set by vite-define at build time
-  user_agent  text,
-  locale      text,
-  payload     jsonb        not null,  -- the actual log entries + env snapshot
-  notes       text                    -- optional free-text from the user
+  app_version  text,             -- git sha, set by vite-define at build time
+  user_agent   text,
+  locale       text,
+  payload      jsonb       not null,  -- the actual log entries + env snapshot
+  notes        text                    -- optional free-text from the user
 );
 
 create index diagnostics_user on diagnostics_reports(user_id, submitted_at desc);
 ```
 
-RLS:
-- INSERT only via the Edge Function (service role).
-- SELECT for `user_id = auth.uid()` (so the user can see their own
-  past submissions, audit-style) and for trainers via the existing
-  `is_trainer()` predicate (so trainers can pull a trainee's last
-  diagnostic with their consent).
+**Short code (W12).** Generated server-side in the Edge Function:
+6 random characters from the Crockford base32 alphabet (no
+ambiguous 0/O/1/I/L). Collision space ≈ 1 billion — at hundreds of
+reports/year, collisions are astronomically unlikely; the function
+retries on the `unique` constraint anyway.
+
+**RLS (S5).** Tighter than the original draft — diagnostics
+reports include the full client log and are materially more
+sensitive than display names. SELECT scope:
+
+```sql
+create policy diagnostics_reports_read on diagnostics_reports for select using (
+  user_id = auth.uid()
+  or exists (
+    select 1 from trainer_trainees t
+    where t.trainee_id = diagnostics_reports.user_id
+      and t.trainer_id = auth.uid()
+      and t.status = 'accepted'
+  )
+);
+```
+
+- INSERT only via the Edge Function (service role bypasses RLS).
+- SELECT for the report owner, AND for a trainer who has an
+  `accepted` designation with that trainee. Replaces the broader
+  `is_trainer()` predicate from the original draft.
 - No UPDATE / DELETE policies — reports are immutable.
 
 Edge Function `submit-diagnostics`:
-- Verifies JWT (same pattern as `invite-user`).
+- Two-client pattern (same as `invite-user`): user client for
+  `getUser()` to authenticate, admin client for the insert.
 - Validates payload size (cap at ~512 KB JSON to avoid spam).
-- Inserts the row, returns the new `id` (6-char short code for the
-  user to read back).
+- Generates `short_code` via base32; retries on unique conflict.
+- Inserts the row, returns `{ ok: true, id, shortCode }`. The UI
+  shows the short code prominently so the user can read it back
+  to support.
+
+**Operator lookup (W13).** A one-line SQL recipe lives in
+`docs/operational-runbook.md`:
+
+```sql
+select payload, notes, submitted_at, user_id
+  from diagnostics_reports
+ where short_code = $1;
+```
+
+Plus a paired query for `audit_events` filtered to the same user
+between `now() - interval '1 day'` and `submitted_at`.
 
 ### (Optional, future) Layer 5 — Sentry / Axiom integration
 
@@ -234,61 +331,83 @@ business-meaningful events server-side, immune to client tampering.
 
 ```sql
 create table audit_events (
-  id          uuid        primary key default gen_random_uuid(),
-  user_id     uuid        references profiles(id) on delete set null,
-  event_type  text        not null,  -- e.g. 'invite.sent', 'share.created'
-  resource    jsonb,                 -- { type, id, …}
-  metadata    jsonb,                 -- event-specific context
-  created_at  timestamptz not null default now()
+  id         uuid        primary key default gen_random_uuid(),
+  user_id    uuid        references profiles(id) on delete set null,
+  event_type text        not null,  -- e.g. 'invite.sent', 'share.created'
+  resource   jsonb,                 -- { type, id, …}
+  metadata   jsonb,                 -- event-specific context
+  created_at timestamptz not null default now()
 );
 
 create index audit_events_user on audit_events(user_id, created_at desc);
 create index audit_events_type on audit_events(event_type, created_at desc);
 ```
 
-Sources of events — **triggers + Edge Functions, both**. Triggers
-catch every row change (including ones we add to the app surface
-later without remembering to emit). Edge Functions add per-event
-context that the triggers can't see (e.g. the "already registered"
-branch of `invite-user` writes a single `invite.already_existed`
-event from inside the function, with the caller's IP / user-agent
-in metadata).
+`user_id` semantics (W14): nullable on purpose. `null` means
+"system event" (cron prune, scheduled task). All human-attributable
+events MUST populate `user_id` from `NEW.*` columns, since trigger
+context running under `service_role` (which is how the Edge
+Functions write) has a null `auth.uid()`.
 
-- **Trigger on `invitations` INSERT/UPDATE** — emits `invite.sent`,
-  `invite.cancelled`, `invite.accepted`. Server-of-truth.
-- **Trigger on `trainer_trainees` INSERT/UPDATE** — emits
-  `designation.created`, `designation.accepted`, `designation.declined`,
-  `designation.removed`.
-- **Trigger on `shares` INSERT/UPDATE (deleted_at flip)** — emits
-  `share.created`, `share.revoked`.
-- **Trigger on `exercises` UPDATE (deleted_at NULL→NOT NULL)** —
-  emits `exercise.deleted`.
-- **Trigger on `exercise_bundles` UPDATE (deleted_at)** — emits
-  `bundle.deleted`.
-- **`invite-user` Edge Function** — emits
-  `invite.already_existed` (the branch where Supabase rejects with
-  "user already registered") with `{ inviter, email_masked, ua }` in
-  metadata. The `invite.sent` event for fresh invites is emitted by
-  the trigger above; the function only writes the "already-in"
-  branch so we don't double-emit.
-- **`share-plan` RPC** — emits `plan.shared` with
+Sources of events — **triggers + Edge Functions, both**.
+
+#### Triggers
+
+| Source table | Fires on | Actor (→ `user_id`) | event_type | Gate |
+|---|---|---|---|---|
+| `invitations` | INSERT, `NEW.already_existed = false` | `NEW.inviter_id` | `invite.sent` | **B1**: skip when `already_existed = true` — the function emits its own event |
+| `invitations` | INSERT, `NEW.already_existed = true` | `NEW.inviter_id` | `invite.already_existed` | (function path; see below) |
+| `invitations` | UPDATE, `cancelled_at` flipped | `NEW.inviter_id` | `invite.cancelled` | NEW.cancelled_at IS NOT NULL AND OLD.cancelled_at IS NULL |
+| `invitations` | UPDATE, `accepted_at` flipped | `NEW.inviter_id` | `invite.accepted` | NEW.accepted_at IS NOT NULL AND OLD.accepted_at IS NULL |
+| `trainer_trainees` | INSERT | `NEW.trainer_id` | `designation.created` | — |
+| `trainer_trainees` | UPDATE, status → 'accepted' | `NEW.trainee_id` | `designation.accepted` | NEW.status='accepted' AND OLD.status<>'accepted' |
+| `trainer_trainees` | UPDATE, status → 'declined' | `NEW.trainee_id` | `designation.declined` | NEW.status='declined' AND OLD.status<>'declined' |
+| `trainer_trainees` | DELETE | `OLD.trainer_id` | `designation.removed` | — |
+| `shares` | INSERT, `deleted_at IS NULL` | `NEW.granter_id` | `share.created` | — |
+| `shares` | UPDATE, `deleted_at` flipped | `NEW.granter_id` | `share.revoked` | NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL |
+| `exercises` | UPDATE, `deleted_at` flipped | `NEW.owner_id` | `exercise.deleted` | same gate |
+| `exercise_bundles` | UPDATE, `deleted_at` flipped | `NEW.owner_id` | `bundle.deleted` | same gate |
+
+Every trigger function is `SECURITY DEFINER set search_path =
+public` so it can write into `audit_events` regardless of the
+caller's role. Each function reads the actor explicitly from
+`NEW.*` (or `OLD.*` for DELETE) — never from `auth.uid()`, which
+is null when the writer is `service_role` (B2).
+
+#### Edge Functions / RPCs
+
+- **`invite-user`** (`invite.already_existed` branch only) —
+  writes the audit row directly when Supabase rejects the invite
+  because the user is already registered. Metadata:
+  `{ inviter, email_masked, ua }`. The `invite.sent` event is
+  emitted by the trigger above for the fresh-invite branch only,
+  per the `NEW.already_existed = false` gate — no double-emit.
+- **`share_plan`** — emits `plan.shared` with
   `{ original_plan_id, cloned_plan_id, recipient, exercise_count }`.
-  Trigger-only would just see "new plans row inserted" without the
-  `original_plan_id` context.
-- **`promote_to_trainer` RPC** — emits `trainer.promoted` with
-  `{ promoter, promoted }`. Trigger can't see who did it (only that
-  `is_trainer` flipped).
+  The trigger on `plans` INSERT can't see `original_plan_id`
+  because it's not on the row.
+- **`promote_to_trainer`** — emits `trainer.promoted` with
+  `{ promoter, promoted }`. A trigger on `profiles` UPDATE could
+  detect that `is_trainer` flipped but can't see who flipped it.
 
-The trigger and function paths write to the same `audit_events`
-table; the `event_type` namespace tells them apart
-(`invite.sent` from a trigger vs `invite.already_existed` from the
-function vs `share.created` from a trigger). No coupling between
-the two — if a future trigger fires AND a function emits, the row
-just shows up twice with different event_types, both legitimate.
+**RLS (S5)** — same tightening as `diagnostics_reports`. Owner OR
+trainer with an `accepted` designation to that user:
 
-RLS: same as `diagnostics_reports` — owner sees their own events;
-trainers see their trainees' events. Useful for "what happened to my
-account between Monday and Wednesday" without grepping triggers.
+```sql
+create policy audit_events_read on audit_events for select using (
+  user_id = auth.uid()
+  or exists (
+    select 1 from trainer_trainees t
+    where t.trainee_id = audit_events.user_id
+      and t.trainer_id = auth.uid()
+      and t.status = 'accepted'
+  )
+);
+```
+
+No INSERT/UPDATE/DELETE policies — only `service_role` writes (the
+triggers and Edge Functions are SECURITY DEFINER, which bypasses
+RLS by definition).
 
 ## Pointers to existing Supabase logs (the cheap layer)
 
@@ -338,6 +457,16 @@ explicitly when an email needs to land in the context. Keeping
 masking explicit avoids the "automatic redactor stripped something
 useful" failure mode.
 
+**Enforcement (S6).** "Explicit at every call site" is correct in
+principle but loses the next time a contributor writes
+`log.warn('invite', 'failed', { email: user.email })` without
+remembering the helper. PR A ships a small ESLint rule
+(`local/no-unmasked-email` in `eslint.config.js`) that flags any
+LogContext literal containing an `email:` key whose value isn't
+either a `maskEmail(...)` call or a literal string already in
+masked form (`/^[^@]\*+@/`). Violations are lint errors, not
+warnings, so CI catches them before merge.
+
 ## Storage / volume
 
 Per-user ring buffer (500 entries × ~600 bytes avg) ≈ **300 KB**
@@ -346,39 +475,97 @@ worst-case in IndexedDB. Trivial.
 `diagnostics_reports` table — assume <5 reports per user per month at
 peak, ~200 KB each → ~10 MB per 10 users per month. Trivial.
 
-`audit_events` table — assume 100 events per user per day at peak →
-~3 MB per user per month. Add a TTL job (RPC + cron) that prunes
-rows older than 90 days; with the trainer feature set, 90 days is
-plenty for "what happened recently" debugging.
+`audit_events` table (revised per S8; original estimate was off
+~5×). The volume is dominated by sync ticks and user actions:
 
-## Execution plan (5 PRs)
+- **Sync events** at active use: push every 30s + pull every 60s
+  → ~3 events/min when the app is open. Assume 2h active/day per
+  user → **360 sync events/user/day**.
+- **User actions** (share, designate, invite, plan edit, exercise
+  save, etc.): variable but call it **50/user/day** at peak.
+- **Triggered events** (designation accepts, shares created, etc.)
+  ride on top of the user-action count, but the trigger gates
+  collapse them to one row per state transition.
 
-1. **PR A — Logger module + Dexie ring buffer + console-mirror.**
-   Standalone; doesn't change any existing call sites. Verifies the
-   buffer survives reload, doesn't survive sign-out (the existing
-   `db.delete()` in the sign-out handler clears it). Tests for
-   insert / read / trim / mask.
-2. **PR B — Strategic call sites.** Replaces ~10 `console.warn`s in
-   `src/sync/*`, `src/auth/AuthProvider.tsx`, `src/invitations.ts`,
-   `src/sharing.ts` with `log.warn` / `log.error`. Adds new info-
-   level emits at the sync-success and user-action points listed
-   above. No new tests strictly required; smoke-test by reading the
+Realistic peak: **~500/user/day**. At 100 users → 50k rows/day →
+~15 MB/day → **~1.5 GB at 90-day TTL**.
+
+That's still cheap relative to Supabase's Free 500 MB DB or any
+paid tier, but the cutoff has to actually be enforced. The TTL is
+a real `pg_cron` job that ships with the migration:
+
+```sql
+-- Requires pg_cron extension (enable in Dashboard → Database →
+-- Extensions). The job runs daily at 03:00 UTC.
+select cron.schedule(
+  'prune-audit-events',
+  '0 3 * * *',
+  $$
+    delete from audit_events
+     where created_at < now() - interval '90 days';
+  $$
+);
+```
+
+If `pg_cron` isn't available on your tier, the fallback is a
+Supabase Edge Function on a GitHub-Actions cron that hits an RPC.
+Spec'd in the migration as a comment; not blocking PR-E since
+180-day or 365-day retention is fine while we're under 1 GB.
+
+## Execution plan (6 PRs)
+
+PR A and PR B build the client side. PR C combines the
+Edge Function + table + Settings panel into one ship — sending
+them separately means users see a "Send" button that doesn't work
+yet (the original draft's PR-C-before-PR-D inversion; O15). PR D
+ships the server-side audit trail. PR E ships the remote-alerting
+cron (promoted from "v1.1 risk"; S9) so dead-letter growth doesn't
+sit silent.
+
+1. **PR A — Logger module + own Dexie database + console-mirror.**
+   `src/diagnostics/{categories,logger,install}.ts`. Buffer lives
+   in a separate `ah-keung-diagnostics` Dexie DB so sign-out
+   doesn't wipe it (S4). Window handlers for `error` and
+   `unhandledrejection`. ESLint rule for `no-unmasked-email`
+   (S6). Stack-truncation utility (S10). Tests: insert / read /
+   trim by count / mask helper / category typing / DEV-mode
+   console mirror / buffer survives `ah-keung` deletion.
+2. **PR B — Strategic call sites.** Replaces the ~10
+   `console.warn`s in `src/sync/index.ts`,
+   `src/sync/imageUploadSweep.ts`, etc. with `log.warn` /
+   `log.error`. Adds new info-level emits at sync-success and
+   user-action points listed above. Smoke-test by reading the
    buffer after a sync round-trip.
-3. **PR C — Diagnostics panel in Settings.** "View diagnostics"
-   collapsible, list view, Copy + Clear actions. No remote upload
-   yet (Send button stubbed disabled).
-4. **PR D — submit-diagnostics Edge Function + `diagnostics_reports`
-   table.** Send button wired up. Returns short code for the user
-   to read back to support.
-5. **PR E — `audit_events` table + triggers on the existing share /
-   designate / invitation tables.** Adds the server-side audit
-   trail. Edge Functions write rows from inside their existing
-   transactions. Tests assert events are emitted on each trigger
-   condition.
-
-Sentry / Axiom integration is intentionally not in the plan.
-Re-evaluate after we have 100+ active users or after we hit the
-second class of issue this plan doesn't catch.
+3. **PR C — Edge Function + `diagnostics_reports` + Settings
+   panel** (combined — see O15). Migration with the table + RLS
+   from this doc. `supabase/functions/submit-diagnostics/`
+   following the same two-client pattern as `invite-user`. Short-
+   code generation. Settings → Diagnostics panel: list view,
+   Copy / Send / Clear actions. The Send button is live from day
+   one. `docs/operational-runbook.md` gets the short-code lookup
+   recipe (W13).
+4. **PR D — `audit_events` table + triggers + Edge Function
+   emits.** Migration with the table, RLS (owner OR designated
+   trainer), all the triggers from the table above with the
+   gates correctly set (B1) and `NEW.*`-based actor reads (B2).
+   `invite-user` Edge Function gains the `already_existed`
+   emit; `share_plan` and `promote_to_trainer` RPCs gain their
+   structured emits. Tests assert one event per trigger
+   condition, exactly. `pg_cron` job for 90-day TTL ships in the
+   same migration with a fallback comment if `pg_cron` isn't
+   available.
+5. **PR E — Remote alerting** (S9). Daily Edge Function (or
+   `pg_cron` job) that:
+   - Counts `sync_dead_letter` rows; alerts if growth > N/day or
+     total > M.
+   - Counts `audit_events.event_type LIKE '%.failed'` in the
+     last 24h; alerts on a spike.
+   - Sends an email to the project owner via the same custom
+     SMTP. ~30 lines.
+6. **PR F (optional, deferred) — Sentry / Axiom tap.** Logger
+   already exposes an `onLog` callback; integration is a single
+   file. Re-evaluate after we have 100+ active users or hit the
+   second class of issue this plan doesn't catch.
 
 ## Tests
 
@@ -396,35 +583,34 @@ second class of issue this plan doesn't catch.
 
 ## Risks / open items
 
-1. **Buffer flushes on sign-out.** The existing sign-out handler in
-   `AuthProvider` does `db.delete()` to clear all user data — that
-   also nukes the log buffer. If we want the buffer to survive
-   sign-out (for "I signed out then back in and the issue persists"
-   reports), the logger needs its own database OR an opt-in
-   "preserve diagnostics across sessions" toggle. v1: nuked, easier.
-2. **Logger volume on iOS Safari.** IndexedDB writes on iOS have
-   historically been slow under memory pressure. The ring buffer
-   batches inserts every 250ms via a debounce so the 60Hz tick of a
-   busy sync push doesn't open 60 transactions/sec.
-3. **Diagnostics upload over slow networks.** A 512 KB JSON over a
+(Risk #1 from the original draft — "buffer flushes on sign-out" —
+is resolved by S4: the logger uses its own Dexie database.
+Risk #5 from the original — "no remote alerting" — is resolved by
+S9: PR E ships a cron. Both have been removed from this list.)
+
+1. **iOS Safari IndexedDB throughput.** Writes on iOS have
+   historically been slow under memory pressure. Mitigated by the
+   in-memory queue + 250 ms debounce + `bulkAdd` flush
+   (≤4 transactions/sec regardless of emit rate; B3).
+2. **Diagnostics upload over slow networks.** A 512 KB JSON over a
    3G handshake is non-trivial. The Edge Function streams the body
-   to `diagnostics_reports.payload` directly (Postgres TOAST handles
-   the compression); client shows a progress indicator.
-4. **Audit log growth.** TTL job described above; if usage outpaces
-   the 90-day rule, swap to a partitioned table by month (cheap
+   to `diagnostics_reports.payload` directly (Postgres TOAST
+   handles the compression); client shows a progress indicator.
+3. **Audit log growth past 1 GB.** `pg_cron` 90-day TTL is in PR D.
+   If usage outpaces that, partition the table by month (cheap
    migration when needed, not now).
-5. **No remote alerting.** If the dead-letter queue grows or an
-   Edge Function starts failing, no one knows until a user reports
-   it. v1.1: a daily cron RPC that scans dead-letter + emails the
-   project owner on growth.
-6. **Diagnostics submitted via screenshot can leak masked-but-
+4. **Diagnostics submitted via screenshot can leak masked-but-
    contextual data.** Even with emails masked and no display-name
    masking, a snippet of a screenshot shared in the wrong place
-   could expose trainer↔trainee relationships and exercise content.
-   Mitigation: the diagnostics panel's Copy button copies JSON
+   could expose trainer↔trainee relationships and exercise
+   content. Mitigation: the panel's Copy button copies JSON
    (not pretty-printed), making casual screenshotting harder than
    plain text. The Send-to-support button uploads via TLS to a
    table the recipient owns, no third-party hop.
+5. **ESLint rule false positives.** `no-unmasked-email` flags any
+   `email:` key whose value isn't `maskEmail(...)` or already-
+   masked. Legitimate non-email fields named `email` would trip
+   it (none exist today; flagged if one is added).
 
 ## Open decisions
 
@@ -614,6 +800,20 @@ feature flag until D lands.
 
 ### Resolution log
 
-To be filled in as items are addressed in subsequent PRs. Format:
-`B1 — resolved by …` or `S6 — accepted, scheduled PR …` or
-`O15 — deferred, tracked separately`.
+| Finding | Status | Where addressed |
+|---|---|---|
+| B1 | **Folded into design** | "Triggers" sub-table in Server-side audit trail: `invitations` INSERT trigger gates on `NEW.already_existed = false` for the `invite.sent` event; the `already_existed = true` case emits `invite.already_existed` from the Edge Function only. No double-emit possible. |
+| B2 | **Folded into design** | Every trigger reads the actor explicitly from `NEW.*` / `OLD.*` columns (column noted per row in the triggers table). Functions are `SECURITY DEFINER` so they can write to `audit_events` regardless of caller role. `auth.uid()` is not used inside triggers. |
+| B3 | **Folded into design** | Layer 1 now spells out the algorithm: in-memory `pending: LogEntry[]` queue, debounced `bulkAdd` flush every 250 ms (or on `pending.length ≥ 50`), post-flush prune by `seq` keeping count = 500. One concurrent flusher via a `flushing` guard. No race-prone count+delete on every insert. |
+| S4 | **Folded into design** | Logger uses its own Dexie database `ah-keung-diagnostics`, untouched by the existing `db.delete()` sign-out wipe. Settings → Diagnostics gets a "Clear all diagnostics" action to retain user control. |
+| S5 | **Folded into design** | Both `diagnostics_reports` and `audit_events` get explicit RLS SELECT policies that join through `trainer_trainees` with `status = 'accepted'`. Replaces the broader `is_trainer()` predicate from the original draft. |
+| S6 | **Folded into PR A** | Privacy section specifies the `local/no-unmasked-email` ESLint rule. Lint error (not warning) so CI catches it. False-positive risk noted as risk #5. |
+| S7 | **Folded into design** | Layer 1 spells out: `info` mirrors to `console.log` only in `import.meta.env.DEV`; `warn`/`error` mirror to console always. |
+| S8 | **Folded into design** | Storage / volume section recomputed: ~500 events/user/day at peak → ~15 MB/day at 100 users → ~1.5 GB at 90-day TTL. `pg_cron` job written out in PR D with a fallback comment for tiers without `pg_cron`. |
+| S9 | **Promoted to PR E** | Daily Edge Function or `pg_cron` job that scans `sync_dead_letter` + `audit_events` error spikes and emails the project owner. ~30 lines. Was "v1.1 risk" in the original. |
+| S10 | **Folded into design** | Layer 1 specifies `errorStack` capped at 2 KB or top-10 frames at log-write time. |
+| W11 | **Folded into design** | Layer 1 includes the `CATEGORY` const and `Category` type. Typos = compile error. |
+| W12 | **Folded into design** | `diagnostics_reports` schema gains a `short_code text not null unique` column. Edge Function generates 6-char Crockford base32 server-side with retry-on-conflict. Returned to the UI as the value the user reads back to support. |
+| W13 | **Folded into design** | `docs/operational-runbook.md` (to be created in PR C) gets the SQL recipe for looking a report up by short code, plus a paired query for `audit_events` filtered to the same user in the relevant time window. |
+| W14 | **Folded into design** | `audit_events.user_id` nullability is documented: `null` means "system event" (cron etc.); human-attributable events MUST populate from `NEW.*`. |
+| O15 | **Folded into PR sequencing** | PR C now combines the Edge Function + table + Settings panel so the Send button is live from day one. The PR C-before-D inversion is gone. |
