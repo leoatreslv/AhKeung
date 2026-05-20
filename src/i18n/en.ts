@@ -190,6 +190,25 @@ export const en: Translation = {
     promote: 'Promote',
     promoted: 'Promoted',
     promoteConfirm: 'Promote this trainee to trainer? They will be able to author exercises and designate their own trainees.',
+
+    inviteByEmail: 'Invite someone new',
+    inviteEmailPlaceholder: 'their email address',
+    inviteSend: 'Send invite',
+    inviteSending: 'Sending…',
+    inviteSent: 'Invite sent.',
+    inviteAlreadyExisted: 'Already had an account — designate them via search above.',
+    inviteRateLimited: 'You\'ve hit the daily invite limit. Try again tomorrow.',
+    inviteFailed: 'Couldn\'t send the invite',
+
+    pendingInvites: 'Outbound invitations',
+    inviteStatusPending: 'Pending',
+    inviteStatusAccepted: 'Accepted',
+    inviteStatusAlreadyExisted: 'Already in',
+    inviteStatusCancelled: 'Cancelled',
+    inviteStatusExpired: 'Expired',
+    inviteCancel: 'Cancel',
+    inviteCancelConfirm: 'Cancel this invitation? The recipient won\'t be able to use the link any more.',
+    inviteResend: 'Resend',
   },
 
   share: {

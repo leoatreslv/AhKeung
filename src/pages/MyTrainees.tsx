@@ -7,6 +7,8 @@ import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { useMyTrainees, partitionByStatus } from '../useDesignations';
 import { useDisplayName } from '../useDisplayName';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
+import { useInvitations, classifyInvitation, type Invitation, type InvitationStatus } from '../useInvitations';
+import { inviteByEmail, cancelInvitation } from '../invitations';
 
 interface ProfileSummary { id: string; display_name: string | null }
 
@@ -134,6 +136,10 @@ export function MyTrainees() {
         )}
       </div>
 
+      <InviteSection />
+
+      <PendingInvitesSection />
+
       <DesignationSection title={t.myTrainees.accepted} rows={accepted} chip="bg-emerald-600/30 text-emerald-300 border-emerald-700/50" onRemove={undesignate} canPromote />
       <DesignationSection title={t.myTrainees.pending}  rows={pending}  chip="bg-amber-600/30 text-amber-300 border-amber-700/50"      onRemove={undesignate} />
       <DesignationSection title={t.myTrainees.declined} rows={declined} chip="bg-slate-600/30 text-slate-400 border-slate-600"          onRemove={undesignate} />
@@ -216,4 +222,164 @@ function PromoteButton({ traineeId }: { traineeId: string }) {
 function TraineeName({ id, className }: { id: string; className?: string }) {
   const name = useDisplayName(id);
   return <span className={className}>{name ?? '…'}</span>;
+}
+
+// ─── Invite-by-email ───────────────────────────────────────────────
+
+function InviteSection() {
+  const { t } = useI18n();
+  const { refresh } = useInvitations();
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ kind: 'ok' | 'already' | 'error'; msg: string } | null>(null);
+
+  async function send() {
+    const trimmed = email.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const res = await inviteByEmail(trimmed);
+      if (!res.ok) {
+        const err = res.error ?? '';
+        if (/rate limit/i.test(err)) {
+          setStatus({ kind: 'error', msg: t.myTrainees.inviteRateLimited });
+        } else {
+          setStatus({ kind: 'error', msg: `${t.myTrainees.inviteFailed}: ${err}` });
+        }
+        return;
+      }
+      if (res.alreadyExisted) {
+        setStatus({ kind: 'already', msg: t.myTrainees.inviteAlreadyExisted });
+      } else {
+        setStatus({ kind: 'ok', msg: t.myTrainees.inviteSent });
+      }
+      setEmail('');
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <label className="text-xs text-slate-400 block mb-1">{t.myTrainees.inviteByEmail}</label>
+      <div className="flex gap-2">
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}
+          placeholder={t.myTrainees.inviteEmailPlaceholder}
+          className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base"
+        />
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={busy || !email.trim()}
+          className="px-3 bg-keung-600 hover:bg-keung-700 disabled:opacity-50 rounded-lg text-sm font-semibold"
+        >{busy ? t.myTrainees.inviteSending : t.myTrainees.inviteSend}</button>
+      </div>
+      {status && (
+        <p className={`text-xs mt-2 ${
+          status.kind === 'ok'      ? 'text-emerald-400'
+          : status.kind === 'already' ? 'text-amber-400'
+          :                             'text-rose-400'
+        }`}>{status.msg}</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Outbound invitations list ─────────────────────────────────────
+
+function PendingInvitesSection() {
+  const { t } = useI18n();
+  const { list, refresh } = useInvitations();
+  if (!list || list.length === 0) return null;
+  return (
+    <div>
+      <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-1.5">{t.myTrainees.pendingInvites}</h3>
+      <ul className="space-y-1">
+        {list.map((inv) => (
+          <InvitationRow key={inv.id} inv={inv} onChange={() => void refresh()} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => void }) {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const status = classifyInvitation(inv);
+  const statusLabel = statusToLabel(status, t);
+  const chipClass = statusToChip(status);
+
+  async function cancel() {
+    if (busy) return;
+    if (!confirm(t.myTrainees.inviteCancelConfirm)) return;
+    setBusy(true);
+    try { await cancelInvitation(inv.id); onChange(); }
+    finally { setBusy(false); }
+  }
+
+  async function resend() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      // The Edge Function's on-conflict upsert handles a re-invite:
+      // clears cancelled_at, bumps created_at/expires_at, re-issues
+      // the auth email.
+      await inviteByEmail(inv.email);
+      onChange();
+    } finally { setBusy(false); }
+  }
+
+  const canCancel = status === 'pending';
+  const canResend = status === 'pending' || status === 'expired' || status === 'cancelled';
+
+  return (
+    <li className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex items-center gap-2">
+      <span className="flex-1 text-sm truncate" title={inv.email}>{inv.email}</span>
+      <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${chipClass}`}>{statusLabel}</span>
+      {canResend && (
+        <button
+          type="button"
+          onClick={() => void resend()}
+          disabled={busy}
+          className="text-xs text-keung-500 hover:text-keung-400 disabled:opacity-50 px-1"
+        >{t.myTrainees.inviteResend}</button>
+      )}
+      {canCancel && (
+        <button
+          type="button"
+          onClick={() => void cancel()}
+          disabled={busy}
+          aria-label={t.myTrainees.inviteCancel}
+          className="text-slate-500 hover:text-rose-400 disabled:opacity-50 text-sm px-1"
+        >✕</button>
+      )}
+    </li>
+  );
+}
+
+function statusToLabel(s: InvitationStatus, t: ReturnType<typeof useI18n>['t']): string {
+  switch (s) {
+    case 'pending':         return t.myTrainees.inviteStatusPending;
+    case 'accepted':        return t.myTrainees.inviteStatusAccepted;
+    case 'already-existed': return t.myTrainees.inviteStatusAlreadyExisted;
+    case 'cancelled':       return t.myTrainees.inviteStatusCancelled;
+    case 'expired':         return t.myTrainees.inviteStatusExpired;
+  }
+}
+
+function statusToChip(s: InvitationStatus): string {
+  switch (s) {
+    case 'pending':         return 'bg-amber-600/30 text-amber-300 border-amber-700/50';
+    case 'accepted':        return 'bg-emerald-600/30 text-emerald-300 border-emerald-700/50';
+    case 'already-existed': return 'bg-slate-600/30 text-slate-300 border-slate-600';
+    case 'cancelled':       return 'bg-slate-600/30 text-slate-400 border-slate-600';
+    case 'expired':         return 'bg-rose-600/20 text-rose-300 border-rose-700/40';
+  }
 }

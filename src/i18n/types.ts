@@ -187,6 +187,25 @@ export interface Translation {
     promote: string;
     promoted: string;
     promoteConfirm: string;
+
+    inviteByEmail: string;
+    inviteEmailPlaceholder: string;
+    inviteSend: string;
+    inviteSending: string;
+    inviteSent: string;
+    inviteAlreadyExisted: string;
+    inviteRateLimited: string;
+    inviteFailed: string;
+
+    pendingInvites: string;
+    inviteStatusPending: string;
+    inviteStatusAccepted: string;
+    inviteStatusAlreadyExisted: string;
+    inviteStatusCancelled: string;
+    inviteStatusExpired: string;
+    inviteCancel: string;
+    inviteCancelConfirm: string;
+    inviteResend: string;
   };
 
   share: {

@@ -190,6 +190,25 @@ export const zhHant: Translation = {
     promote: '升級',
     promoted: '已升級',
     promoteConfirm: '將這位學員升級為教練?升級後他們可以自行建立動作及指派自己的學員。',
+
+    inviteByEmail: '邀請新用戶',
+    inviteEmailPlaceholder: '對方電郵地址',
+    inviteSend: '寄出邀請',
+    inviteSending: '發送中…',
+    inviteSent: '邀請已寄出。',
+    inviteAlreadyExisted: '這位用戶已有帳號 — 請用上面的搜尋指派。',
+    inviteRateLimited: '今日邀請次數已用完,明天再試。',
+    inviteFailed: '邀請寄出失敗',
+
+    pendingInvites: '已發出的邀請',
+    inviteStatusPending: '等待接受',
+    inviteStatusAccepted: '已加入',
+    inviteStatusAlreadyExisted: '已有帳號',
+    inviteStatusCancelled: '已取消',
+    inviteStatusExpired: '已過期',
+    inviteCancel: '取消',
+    inviteCancelConfirm: '取消這個邀請?對方將無法再用該連結加入。',
+    inviteResend: '重新寄出',
   },
 
   share: {
