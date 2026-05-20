@@ -814,15 +814,15 @@ per hour per invitation) or charge it to the same 10/day bucket.
 | S5 | **Folded into design** | AuthProvider exposes `profileFetchError`; gate table distinguishes "first-time user" (profile fetched, displayName null) from "fetch failed" (error → retry). |
 | S6 | **Folded into design** | Onboarding submit order reversed: `updateUser({ password })` first, `profiles.display_name` second. Mid-flow crash leaves the gate intact for re-prompt. |
 | S7 | **Folded into design** | Login screen section notes the password tab is for returning users only. |
-| S8 | **Folded into design** | Edge Function section now specifies the two-client pattern (user client for caller-auth via `getUser` + `is_trainer` RPC; admin client for `inviteUserByEmail` and the table writes) plus CORS preflight. |
-| S9 | **Folded into design** | Rate limit uses `pg_advisory_xact_lock(hashtext(inviter_id::text))` inside the transaction; count excludes cancelled rows. |
-| S10 | **Folded into design** | `invitations` gains `already_existed boolean default false`. "Already registered" path sets that flag instead of stamping `accepted_at`, so audit shows the real distinction. |
-| S11 | **Folded into design** | Re-invite-after-cancel is explicit in the Edge Function pseudo-SQL: `on conflict do update` clears `cancelled_at`, bumps `created_at`/`expires_at`, preserves any existing `accepted_at` via `coalesce`. Cancel + Resend semantics spelled out. |
+| S8 | **Landed in PR B** | `supabase/functions/invite-user/index.ts`: two clients (user client with forwarded Authorization for `getUser` + `is_trainer` RPC; admin client with service-role key for the admin invite + table writes). CORS preflight handler at top of `Deno.serve`. |
+| S9 | **Landed in PR B** | `invite_rate_check(inviter, max_per_day)` SECURITY DEFINER RPC in migration 0006: `pg_advisory_xact_lock(hashtext(inviter::text))` then a count of `created_at > now() - interval '1 day'` excluding `cancelled_at IS NOT NULL`. Function returns `{ exceeded, count_24h }` and the Edge Function returns 429 on `exceeded = true` before calling the admin API. |
+| S10 | **Landed in PR B** | `invitations.already_existed boolean not null default false` in 0006. Edge Function sets it to `true` on the "User already registered" branch without stamping `accepted_at`. |
+| S11 | **Landed in PR B** | `invitations` upsert in the Edge Function uses `onConflict: 'inviter_id,email'`, clearing `cancelled_at`, bumping `created_at` + `expires_at`. `accepted_at` is preserved (Postgres's default upsert doesn't touch unmentioned columns). |
 | W12 | **Folded into design** | Risks #7: magic link is the stranded-onboarding recovery path; the dashboard flag doesn't block re-issuing magic links to existing-but-incomplete users. |
-| W13 | **Folded into design** | Trigger's email-only fallback handles the case where `invited_by` is missing. |
+| W13 | **Landed in PR B** | `handle_invited_signup` trigger in 0006 runs two updates: first attempting attribution via `raw_user_meta_data->>'invited_by'` (with `nullif()` guarding against empty-string), then a fallback that updates *every* still-pending invitation matching `lower(email)` so audit isn't lost on metadata drift. `coalesce(accepted_at, now())` prevents overwriting an existing stamp. |
 | W14 | **Folded into design** | Risks #6 calls out the dashboard-min-length / client-validator pin. |
 | W15 | **Folded into design** | Login error sniff has the three-branch catch with a friendly fallback. |
 | O16 | **Re-verified in risks** | 0004 tightened `profiles_write`; risks #9 notes to verify on the live project before PR B ships. |
-| O17 | **Folded into PR sequencing** | Dashboard flip bundled with PR B (not PR A) so there's no gap during which account creation is fully broken. Documented in the PR B description. |
+| O17 | **Landed in PR B** | Dashboard flip ("Allow new user sign-ups": off) is a deploy-time step alongside the migration. The migration's header comment is the prompt; no gap because the Edge Function's admin invite bypasses the flag from the same deploy. |
 | O18 | **Partially mitigated, flagged** | Resend uses the same 10/day bucket the invite path enforces, so spam still hits the rate limit. A per-row minimum interval is v1.1 (Risks #8). |
 
