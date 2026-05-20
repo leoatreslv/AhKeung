@@ -19,7 +19,7 @@ The `payload` column holds the JSON the client sent. Each entry has
 optional `errorStack`. Read newest-last.
 
 To see all *server-side* events for the same user in the window
-leading up to the report (once `audit_events` ships in PR D):
+leading up to the report:
 
 ```sql
 with r as (
@@ -33,6 +33,47 @@ select event_type, resource, metadata, created_at
    and audit_events.created_at between r.submitted_at - interval '1 day'
                                    and r.submitted_at + interval '1 hour'
  order by created_at;
+```
+
+## `audit_events` event-type catalogue
+
+Reference for the trigger + Edge Function emits from PR D
+(`supabase/migrations/0008_audit_events.sql`).
+
+| event_type | Source | `user_id` (actor) | Notes |
+|---|---|---|---|
+| `invite.sent`             | trigger on `invitations` INSERT      | inviter | only when `already_existed = false` |
+| `invite.already_existed`  | Edge Function `invite-user`          | inviter | emitted in place of `invite.sent`; metadata adds caller UA |
+| `invite.cancelled`        | trigger on `invitations` UPDATE      | inviter | `cancelled_at` flipped null → not null |
+| `invite.accepted`         | trigger on `invitations` UPDATE      | inviter | `accepted_at` flipped null → not null (via auth-signup trigger) |
+| `designation.created`     | trigger on `trainer_trainees` INSERT | trainer |  |
+| `designation.accepted`    | trigger on `trainer_trainees` UPDATE | trainee | status → accepted |
+| `designation.declined`    | trigger on `trainer_trainees` UPDATE | trainee | status → declined |
+| `designation.removed`     | trigger on `trainer_trainees` DELETE | trainer | (`OLD.*`) |
+| `share.created`           | trigger on `shares` INSERT           | granter | only when `deleted_at IS NULL` at insert |
+| `share.revoked`           | trigger on `shares` UPDATE           | granter | `deleted_at` flipped null → not null |
+| `plan.shared`             | RPC `share_plan`                     | granter | metadata: `{original_plan_id, cloned_plan_id, recipient, exercise_count, superseded_id}` |
+| `exercise.deleted`        | trigger on `exercises` UPDATE        | owner   | `deleted_at` flipped null → not null |
+| `bundle.deleted`          | trigger on `exercise_bundles` UPDATE | owner   | `deleted_at` flipped null → not null |
+| `trainer.promoted`        | RPC `promote_to_trainer`             | promoter | metadata: `{promoter, promoted}` |
+
+`user_id = null` is reserved for system events (e.g. the daily
+`pg_cron` prune). All human-attributable events populate `user_id`
+from `NEW.*` / `OLD.*` columns; `auth.uid()` is unused inside
+triggers because it's null when the writer is `service_role`.
+
+Retention: 90 days via `pg_cron` job `prune-audit-events`. Verify
+the job exists with:
+
+```sql
+select jobname, schedule, command from cron.job where jobname = 'prune-audit-events';
+```
+
+If `pg_cron` isn't enabled on the tier, run the delete by hand
+periodically:
+
+```sql
+delete from audit_events where created_at < now() - interval '90 days';
 ```
 
 ## Where to find Supabase's own logs

@@ -133,6 +133,30 @@ Deno.serve(async (req: Request) => {
 
   if (upsertErr) return jsonResponse({ error: `record failed: ${upsertErr.message}` }, 500);
 
+  // ─── Audit emit (already_existed branch only) ────────────────────
+  // The trigger on invitations.INSERT emits `invite.sent` for the
+  // fresh-invite branch (already_existed=false). The already_existed
+  // path is silent at the trigger level (B1 gate), so the function
+  // emits its own event here with extra metadata the trigger can't
+  // see (caller UA).
+  if (alreadyExisted) {
+    const maskedEmail = normalisedEmail.length > 1 && normalisedEmail.includes('@')
+      ? normalisedEmail[0]
+        + '*'.repeat(Math.max(1, normalisedEmail.indexOf('@') - 1))
+        + normalisedEmail.slice(normalisedEmail.indexOf('@'))
+      : normalisedEmail;
+    const userAgent = req.headers.get('user-agent') ?? null;
+    // Best-effort: a failed audit insert must not fail the invite.
+    // The function already returned all its work; we just log.
+    const { error: auditErr } = await admin.from('audit_events').insert({
+      user_id:    user.id,
+      event_type: 'invite.already_existed',
+      resource:   { type: 'invitation', id: upserted?.id ?? null },
+      metadata:   { inviter: user.id, email_masked: maskedEmail, ua: userAgent },
+    });
+    if (auditErr) console.warn('[invite-user] audit emit failed:', auditErr.message);
+  }
+
   return jsonResponse({
     ok: true,
     invitationId: upserted?.id,
