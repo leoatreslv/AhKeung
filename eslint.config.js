@@ -4,6 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
+import localRules from './eslint-rules/no-unmasked-email.js'
 
 export default defineConfig([
   globalIgnores(['dist']),
@@ -15,6 +16,12 @@ export default defineConfig([
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/no-unmasked-email': 'error',
+    },
     languageOptions: {
       globals: globals.browser,
     },
