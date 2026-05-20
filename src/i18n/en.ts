@@ -290,4 +290,22 @@ export const en: Translation = {
     passwordSaved: 'Password updated.',
     passwordSaveFailed: 'Update failed',
   },
+
+  diagnostics: {
+    title: 'Diagnostics',
+    viewLink: 'View diagnostics',
+    hide: 'Hide',
+    summary: (showing, total) => `Showing ${showing} of ${total} buffered entries`,
+    empty: 'No diagnostic entries recorded yet.',
+    notesLabel: 'Notes for support (optional)',
+    notesPlaceholder: 'Describe what you were doing when something went wrong.',
+    copy: 'Copy',
+    send: 'Send to support',
+    sending: 'Sending…',
+    clear: 'Clear',
+    clearConfirm: 'Clear all diagnostic entries on this device?',
+    sentSuccess: 'Sent. Read this code back to support:',
+    sentHelp: 'They can look up your report using just this code.',
+    sendFailed: 'Send failed',
+  },
 };

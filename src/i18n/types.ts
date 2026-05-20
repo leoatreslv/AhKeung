@@ -287,4 +287,22 @@ export interface Translation {
     passwordSaved: string;
     passwordSaveFailed: string;
   };
+
+  diagnostics: {
+    title: string;
+    viewLink: string;
+    hide: string;
+    summary: (showing: number, totalBuffered: number) => string;
+    empty: string;
+    notesLabel: string;
+    notesPlaceholder: string;
+    copy: string;
+    send: string;
+    sending: string;
+    clear: string;
+    clearConfirm: string;
+    sentSuccess: string;
+    sentHelp: string;
+    sendFailed: string;
+  };
 }

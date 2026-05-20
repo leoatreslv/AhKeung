@@ -290,4 +290,22 @@ export const zhHant: Translation = {
     passwordSaved: '密碼已更新。',
     passwordSaveFailed: '更新失敗',
   },
+
+  diagnostics: {
+    title: '診斷紀錄',
+    viewLink: '檢視診斷紀錄',
+    hide: '收起',
+    summary: (showing, total) => `顯示 ${total} 筆中的 ${showing} 筆`,
+    empty: '尚未記錄到診斷資料。',
+    notesLabel: '給支援人員的備註(選填)',
+    notesPlaceholder: '描述問題發生時你正在做什麼。',
+    copy: '複製',
+    send: '傳送給支援',
+    sending: '傳送中…',
+    clear: '清除',
+    clearConfirm: '清除本機所有診斷紀錄?',
+    sentSuccess: '已送出。請把以下代碼告訴支援人員:',
+    sentHelp: '他們可以用這個代碼查到你提交的報告。',
+    sendFailed: '傳送失敗',
+  },
 };

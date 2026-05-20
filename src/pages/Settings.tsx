@@ -6,6 +6,7 @@ import { useI18n } from '../i18n';
 import { useMyTrainers, partitionByStatus } from '../useDesignations';
 import { useDisplayName } from '../useDisplayName';
 import { db } from '../db';
+import { DiagnosticsSection } from '../diagnostics/DiagnosticsSection';
 
 export function Settings() {
   const { user, profile, signOut } = useAuth();
@@ -118,6 +119,8 @@ export function Settings() {
       <YourTrainersSection />
 
       <ChangePasswordSection />
+
+      <DiagnosticsSection />
 
       <p className="text-sm text-slate-400">Signed in as {user?.email}</p>
       <button
