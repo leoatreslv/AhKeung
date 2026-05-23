@@ -275,7 +275,16 @@ function ImagePicker({
             onChange={onPick}
             className="hidden"
           />
-          {showingNew || showingExisting ? t.exerciseEditor.imageReplace : t.exerciseEditor.imagePick}
+          {t.exerciseEditor.imagePickCamera}
+        </label>
+        <label className="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 text-center cursor-pointer">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={onPick}
+            className="hidden"
+          />
+          {t.exerciseEditor.imagePickLibrary}
         </label>
       </div>
 

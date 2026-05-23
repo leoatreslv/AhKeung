@@ -131,8 +131,8 @@ export interface Translation {
     instructions: string;
     instructionsPlaceholder: string;
     image: string;
-    imagePick: string;
-    imageReplace: string;
+    imagePickCamera: string;
+    imagePickLibrary: string;
     imageUploading: string;
     save: string;
     delete: string;
