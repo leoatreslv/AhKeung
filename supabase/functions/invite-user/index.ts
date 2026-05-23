@@ -102,9 +102,22 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: 'rate limit exceeded', limit: RATE_LIMIT_PER_DAY }, 429);
   }
 
+  // ─── Look up the inviter's display name for the email template ───
+  // The template (Dashboard → Authentication → Email Templates → "Invite
+  // user") can reference {{ .Data.inviter_name }} to personalise the
+  // greeting. Falls back to "your trainer" if the trainer hasn't set a
+  // display name yet.
+  const { data: inviterRow } = await admin.from('profiles')
+    .select('display_name').eq('id', user.id).single() as
+    { data: { display_name: string | null } | null };
+  const inviterName = inviterRow?.display_name?.trim() || 'your trainer';
+
   // ─── Send the admin invite ───────────────────────────────────────
   const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-    data: { invited_by: user.id },
+    data: {
+      invited_by:   user.id,
+      inviter_name: inviterName,
+    },
   });
 
   const alreadyExisted = !!inviteErr && /already (registered|exists)/i.test(inviteErr.message);
