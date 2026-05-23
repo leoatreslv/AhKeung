@@ -1,7 +1,7 @@
 import type { Translation } from './types';
 
 export const en: Translation = {
-  appName: 'Ah Keung',
+  appName: 'I am Ah Keung!',
   tagline: 'your gym buddy',
 
   tabs: { home: 'Home', plans: 'Plans', library: 'Library', metrics: 'Metrics' },

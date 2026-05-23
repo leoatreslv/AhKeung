@@ -27,7 +27,7 @@ describe('i18n', () => {
       </I18nProvider>,
     );
     expect(screen.getByTestId('locale').textContent).toBe('en');
-    expect(screen.getByTestId('app-name').textContent).toBe('Ah Keung');
+    expect(screen.getByTestId('app-name').textContent).toBe('I am Ah Keung!');
     expect(screen.getByTestId('chest').textContent).toBe('Chest');
   });
 
@@ -39,7 +39,7 @@ describe('i18n', () => {
     );
     fireEvent.click(screen.getByText('zh'));
     expect(screen.getByTestId('locale').textContent).toBe('zh-Hant');
-    expect(screen.getByTestId('app-name').textContent).toBe('阿強');
+    expect(screen.getByTestId('app-name').textContent).toBe('我係阿強!');
     expect(screen.getByTestId('chest').textContent).toBe('胸');
   });
 

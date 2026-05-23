@@ -1,7 +1,7 @@
 import type { Translation } from './types';
 
 export const zhHant: Translation = {
-  appName: '阿強',
+  appName: '我係阿強!',
   tagline: '你的健身夥伴',
 
   tabs: { home: '首頁', plans: '計劃', library: '動作', metrics: '紀錄' },
