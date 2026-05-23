@@ -106,11 +106,19 @@ Deno.serve(async (req: Request) => {
   // The template (Dashboard → Authentication → Email Templates → "Invite
   // user") can reference {{ .Data.inviter_name }} to personalise the
   // greeting. Falls back to "your trainer" if the trainer hasn't set a
-  // display name yet.
-  const { data: inviterRow } = await admin.from('profiles')
-    .select('display_name').eq('id', user.id).single() as
-    { data: { display_name: string | null } | null };
-  const inviterName = inviterRow?.display_name?.trim() || 'your trainer';
+  // display name yet, or if the lookup throws/fails for any reason
+  // (the invite must not 500 because we couldn't read one column).
+  let inviterName = 'your trainer';
+  try {
+    const { data: inviterRow } = await admin.from('profiles')
+      .select('display_name').eq('id', user.id).maybeSingle() as
+      { data: { display_name: string | null } | null };
+    const trimmed = inviterRow?.display_name?.trim();
+    if (trimmed) inviterName = trimmed;
+  } catch (e) {
+    console.warn('[invite-user] inviter name lookup failed:',
+      e instanceof Error ? e.message : String(e));
+  }
 
   // ─── Send the admin invite ───────────────────────────────────────
   const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
@@ -136,16 +144,28 @@ Deno.serve(async (req: Request) => {
   // display_name yet, App.tsx routes them straight to Onboarding —
   // not ResetPassword, courtesy of the routing guard added in the
   // same PR that landed this branch.
+  //
+  // Use a fresh anon-keyed client (not the admin one): the auth
+  // /recover endpoint authenticates the request via the anon apikey
+  // header; a service-role apikey path can throw in some supabase-js
+  // versions. Wrapped in try/catch so a recovery-email failure can
+  // NEVER 500 the function — the trainer's UI can still fall back to
+  // asking the recipient to use "Forgot password?" themselves.
   if (alreadyExisted) {
-    const origin = req.headers.get('origin');
-    const { error: recoverErr } = await admin.auth.resetPasswordForEmail(email, {
-      redirectTo: origin ?? undefined,
-    });
-    if (recoverErr) {
-      // Log but don't fail the call — the invitation row is still
-      // recorded below, and the trainer can ask the recipient to use
-      // "Forgot password?" themselves.
-      console.warn('[invite-user] recovery email failed:', recoverErr.message);
+    const origin = req.headers.get('origin') ?? req.headers.get('referer') ?? undefined;
+    try {
+      const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      const { error: recoverErr } = await anonClient.auth.resetPasswordForEmail(email, {
+        redirectTo: origin,
+      });
+      if (recoverErr) {
+        console.warn('[invite-user] recovery email failed:', recoverErr.message);
+      }
+    } catch (e) {
+      console.warn('[invite-user] recovery email threw:',
+        e instanceof Error ? e.message : String(e));
     }
   }
 
