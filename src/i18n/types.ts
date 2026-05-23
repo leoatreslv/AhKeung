@@ -206,6 +206,8 @@ export interface Translation {
     inviteCancel: string;
     inviteCancelConfirm: string;
     inviteResend: string;
+    inviteDesignate: string;
+    inviteDesignateFailed: string;
   };
 
   share: {

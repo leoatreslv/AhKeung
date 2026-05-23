@@ -209,6 +209,8 @@ export const zhHant: Translation = {
     inviteCancel: '取消',
     inviteCancelConfirm: '取消這個邀請?對方將無法再用該連結加入。',
     inviteResend: '重新寄出',
+    inviteDesignate: '+ 指派',
+    inviteDesignateFailed: '指派失敗,請再試。',
   },
 
   share: {

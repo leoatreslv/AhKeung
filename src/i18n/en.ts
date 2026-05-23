@@ -209,6 +209,8 @@ export const en: Translation = {
     inviteCancel: 'Cancel',
     inviteCancelConfirm: 'Cancel this invitation? The recipient won\'t be able to use the link any more.',
     inviteResend: 'Resend',
+    inviteDesignate: '+ Designate',
+    inviteDesignateFailed: 'Couldn\'t designate this trainee. Please try again.',
   },
 
   share: {

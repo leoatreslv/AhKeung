@@ -8,7 +8,8 @@ import { useMyTrainees, partitionByStatus } from '../useDesignations';
 import { useDisplayName } from '../useDisplayName';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
 import { useInvitations, classifyInvitation, type Invitation, type InvitationStatus } from '../useInvitations';
-import { inviteByEmail, cancelInvitation } from '../invitations';
+import { inviteByEmail, cancelInvitation, designateInvitedUser } from '../invitations';
+import { flushNow } from '../sync';
 
 interface ProfileSummary { id: string; display_name: string | null }
 
@@ -312,6 +313,7 @@ function PendingInvitesSection() {
 function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => void }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const status = classifyInvitation(inv);
   const statusLabel = statusToLabel(status, t);
   const chipClass = statusToChip(status);
@@ -320,6 +322,7 @@ function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => voi
     if (busy) return;
     if (!confirm(t.myTrainees.inviteCancelConfirm)) return;
     setBusy(true);
+    setError(null);
     try { await cancelInvitation(inv.id); onChange(); }
     finally { setBusy(false); }
   }
@@ -327,6 +330,7 @@ function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => voi
   async function resend() {
     if (busy) return;
     setBusy(true);
+    setError(null);
     try {
       // The Edge Function's on-conflict upsert handles a re-invite:
       // clears cancelled_at, bumps created_at/expires_at, re-issues
@@ -336,36 +340,66 @@ function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => voi
     } finally { setBusy(false); }
   }
 
+  async function designate() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await designateInvitedUser(inv.id);
+      // The RPC inserted the trainer_trainees row server-side; trigger
+      // a sync round-trip so the trainer's local Dexie picks it up and
+      // the Designations section refreshes immediately rather than
+      // waiting for the next 60s pull tick.
+      await flushNow();
+      onChange();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.myTrainees.inviteDesignateFailed);
+    } finally { setBusy(false); }
+  }
+
   // 'already-existed' rows triggered a recovery email rather than a
   // fresh invite. That email has its own short Supabase expiry (~1h);
   // we don't track it, so allow resend unconditionally until the
   // trainer cancels. Same for cancel — let the trainer mop up
-  // already-existed rows once the recipient has completed onboarding.
-  const canCancel = status === 'pending' || status === 'already-existed';
+  // already-existed and accepted rows once the recipient has
+  // completed onboarding (and after Designate, in the accepted case).
+  const canCancel = status === 'pending' || status === 'already-existed' || status === 'accepted';
   const canResend = status === 'pending' || status === 'expired'
                  || status === 'cancelled' || status === 'already-existed';
+  const canDesignate = status === 'accepted';
 
   return (
-    <li className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex items-center gap-2">
-      <span className="flex-1 text-sm truncate" title={inv.email}>{inv.email}</span>
-      <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${chipClass}`}>{statusLabel}</span>
-      {canResend && (
-        <button
-          type="button"
-          onClick={() => void resend()}
-          disabled={busy}
-          className="text-xs text-keung-500 hover:text-keung-400 disabled:opacity-50 px-1"
-        >{t.myTrainees.inviteResend}</button>
-      )}
-      {canCancel && (
-        <button
-          type="button"
-          onClick={() => void cancel()}
-          disabled={busy}
-          aria-label={t.myTrainees.inviteCancel}
-          className="text-slate-500 hover:text-rose-400 disabled:opacity-50 text-sm px-1"
-        >✕</button>
-      )}
+    <li className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-sm truncate" title={inv.email}>{inv.email}</span>
+        <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${chipClass}`}>{statusLabel}</span>
+        {canDesignate && (
+          <button
+            type="button"
+            onClick={() => void designate()}
+            disabled={busy}
+            className="text-xs text-keung-500 hover:text-keung-400 disabled:opacity-50 px-1"
+          >{t.myTrainees.inviteDesignate}</button>
+        )}
+        {canResend && (
+          <button
+            type="button"
+            onClick={() => void resend()}
+            disabled={busy}
+            className="text-xs text-keung-500 hover:text-keung-400 disabled:opacity-50 px-1"
+          >{t.myTrainees.inviteResend}</button>
+        )}
+        {canCancel && (
+          <button
+            type="button"
+            onClick={() => void cancel()}
+            disabled={busy}
+            aria-label={t.myTrainees.inviteCancel}
+            className="text-slate-500 hover:text-rose-400 disabled:opacity-50 text-sm px-1"
+          >✕</button>
+        )}
+      </div>
+      {error && <p className="text-rose-400 text-xs">{error}</p>}
     </li>
   );
 }
