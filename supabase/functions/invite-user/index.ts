@@ -54,6 +54,23 @@ function isValidEmail(s: unknown): s is string {
 
 // @ts-expect-error — Deno.serve is provided by the Edge runtime
 Deno.serve(async (req: Request) => {
+  try {
+    return await handle(req);
+  } catch (e) {
+    // Anything that escapes `handle` becomes a structured 500 instead
+    // of an EDGE_FUNCTION_ERROR shutdown. The body carries the actual
+    // error message so the next debug round-trip points at the real
+    // throw site instead of "function crashed".
+    console.error('[invite-user] unhandled throw:', e);
+    return jsonResponse({
+      error: 'unhandled exception',
+      message: e instanceof Error ? e.message : String(e),
+      name:    e instanceof Error ? e.name    : null,
+    }, 500);
+  }
+});
+
+async function handle(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: CORS_HEADERS });
   }
@@ -218,4 +235,4 @@ Deno.serve(async (req: Request) => {
     invitationId: upserted?.id,
     alreadyExisted,
   });
-});
+}
