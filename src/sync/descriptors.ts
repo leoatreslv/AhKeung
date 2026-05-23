@@ -55,6 +55,12 @@ export type TableDescriptor = PKShape & {
    *  Single-PK tables use 'id'; composite-PK tables use their second server
    *  field (e.g. favorites uses 'exercise_id'). */
   serverSecondaryOrderField: string;
+
+  /** True for tables without a `deleted_at` column where the server hard-
+   *  deletes via cascade triggers (e.g. exercise_bundle_items). The push
+   *  worker translates op='delete' to an actual `DELETE` instead of the
+   *  default `UPDATE … SET deleted_at`. Default: false (soft-delete). */
+  hardDelete?: boolean;
 };
 
 /** Minimal query-builder shape we need from Supabase for key filters. */
@@ -236,6 +242,11 @@ export const DESCRIPTORS: Record<SyncTableName, TableDescriptor> = {
     writability: 'own-only',
     pullPredicate: { kind: 'rls-only' },
     serverSecondaryOrderField: 'exercise_id',
+    // No deleted_at column on this table: bundles cascade-delete items, and
+    // soft-deleted exercises wipe their items via a server-side trigger.
+    // Translate op='delete' to a real DELETE so the push doesn't fail with
+    // "Could not find the 'deleted_at' column".
+    hardDelete: true,
   },
 
   // Shares: owner is the granter. Recipient pulls them too (via RLS).

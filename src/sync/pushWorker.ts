@@ -32,12 +32,19 @@ async function setLocalServerVersion(
 }
 
 const NETWORK_RE = /network/i;
+// PostgREST surfaces schema mismatches as a plain Error without a numeric
+// status (the supabase-js client doesn't always re-attach it). These are
+// permanent — retrying won't make the column appear — so route them to
+// the fatal path so the queue dead-letters after a few attempts instead
+// of looping forever and blocking everything behind it.
+const SCHEMA_CACHE_RE = /could not find (the )?'?[^']+'? column .* in the schema cache/i;
 
 function classifyError(e: unknown): 'network' | 'auth' | 'fatal' {
   if (e instanceof Error) {
     const status = (e as { status?: number }).status;
     if (status === 401 || status === 403) return 'auth';
     if (status && status >= 400 && status < 500) return 'fatal';
+    if (SCHEMA_CACHE_RE.test(e.message)) return 'fatal';
     if (NETWORK_RE.test(e.message)) return 'network';
   }
   return 'network';
@@ -127,6 +134,20 @@ async function processEntry(entry: SyncQueueRow, entries: SyncQueueRow[]): Promi
     return;
   }
   if (entry.op === 'delete') {
+    // Hard-delete tables (e.g. exercise_bundle_items) have no deleted_at
+    // column — the server cascades the actual DELETE. Skip the OCC check
+    // here; the row content carries nothing worth concurrency-controlling
+    // and the parent's cascade triggers maintain referential integrity.
+    if (d.hardDelete) {
+      let dq = getSupabase().from(d.serverTable).delete();
+      dq = applyServerKeyFilter(d, dq, entry.rowId);
+      const dres = await dq.select() as { data: unknown[] | null; error: { message: string } | null };
+      if (dres.error) throw new Error(dres.error.message);
+      // If the row was already gone (cascade ran server-side first), the
+      // delete returns zero rows but the local intent is satisfied.
+      await db.syncQueue.delete(entry.seq!);
+      return;
+    }
     let q = getSupabase().from(d.serverTable).update({ deleted_at: new Date().toISOString() });
     q = applyServerKeyFilter(d, q, entry.rowId);
     if (entry.expectedServerVersion !== null) q = q.eq('updated_at', entry.expectedServerVersion);

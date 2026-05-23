@@ -97,6 +97,27 @@ describe('pushWorker — delete', () => {
   });
 });
 
+describe('pushWorker — hard delete (bundle_items)', () => {
+  it('uses DELETE (not SET deleted_at) for hardDelete tables', async () => {
+    stubAuthenticatedUser({ id: 'u-1' });
+    const fake = getActiveFake();
+
+    // Seed and push an insert, then queue a delete.
+    await putWithSync('exerciseBundleItems', {
+      bundleId: 'b1', exerciseId: 'e1', position: 0,
+    }, 'u-1');
+    await runPushOnce();
+    expect(fake.tables['exercise_bundle_items']).toHaveLength(1);
+
+    await deleteWithSync('exerciseBundleItems', 'b1', 'e1');
+    await runPushOnce();
+
+    // Row is gone on the server (hard delete), not just stamped.
+    expect(fake.tables['exercise_bundle_items']).toHaveLength(0);
+    expect(await db.syncQueue.count()).toBe(0);
+  });
+});
+
 describe('pushWorker — dead letter on 4xx', () => {
   it('moves the queue entry to syncDeadLetter after a non-retryable error', async () => {
     stubAuthenticatedUser({ id: 'u-1' });
