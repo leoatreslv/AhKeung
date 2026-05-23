@@ -336,8 +336,14 @@ function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => voi
     } finally { setBusy(false); }
   }
 
-  const canCancel = status === 'pending';
-  const canResend = status === 'pending' || status === 'expired' || status === 'cancelled';
+  // 'already-existed' rows triggered a recovery email rather than a
+  // fresh invite. That email has its own short Supabase expiry (~1h);
+  // we don't track it, so allow resend unconditionally until the
+  // trainer cancels. Same for cancel — let the trainer mop up
+  // already-existed rows once the recipient has completed onboarding.
+  const canCancel = status === 'pending' || status === 'already-existed';
+  const canResend = status === 'pending' || status === 'expired'
+                 || status === 'cancelled' || status === 'already-existed';
 
   return (
     <li className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex items-center gap-2">
