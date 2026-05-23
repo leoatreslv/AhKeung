@@ -145,7 +145,10 @@ async function handle(req: Request): Promise<Response> {
     },
   });
 
-  const alreadyExisted = !!inviteErr && /already (registered|exists)/i.test(inviteErr.message);
+  // Matches both "User already registered" and "A user with this email
+  // address has already been registered" — Supabase has used both
+  // phrasings across versions.
+  const alreadyExisted = !!inviteErr && /already\b.*\b(registered|exists)/i.test(inviteErr.message);
 
   if (inviteErr && !alreadyExisted) {
     return jsonResponse({ error: `invite failed: ${inviteErr.message}` }, 500);
