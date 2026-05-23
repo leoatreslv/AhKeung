@@ -38,7 +38,13 @@ function Guarded({ children }: { children: ReactNode }) {
 
   if (status === 'loading') return <div className="p-6 text-slate-400">Loading…</div>;
   if (status === 'unauthenticated') return <Login />;
-  if (needsPasswordReset) return <ResetPassword />;
+  // ResetPassword is for already-onboarded users who forgot their password.
+  // If the user arrived via a recovery link but has never set a display name
+  // (e.g. an invited user whose first link was burned by an inbox prefetcher
+  // and we re-sent them a recovery email), skip ResetPassword and route
+  // straight to Onboarding — it sets the password and display name in one
+  // step, so they're not asked for a password twice.
+  if (needsPasswordReset && profile?.displayName) return <ResetPassword />;
   // Profile fetch failed and we have no cached profile to fall back on —
   // don't auto-route to onboarding (would be wrong for an existing user
   // who's just offline). Show a small retry surface instead.

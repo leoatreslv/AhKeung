@@ -126,6 +126,29 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: `invite failed: ${inviteErr.message}` }, 500);
   }
 
+  // ─── Already-existed branch: send a recovery email instead ───────
+  // The user has an auth.users row (either from a previous self-signup
+  // attempt or because their first invite link was burned by an inbox
+  // pre-fetcher before they clicked it). inviteUserByEmail refuses to
+  // re-issue, so fall back to resetPasswordForEmail. The recipient
+  // verifies that link via the same ?type=recovery path the
+  // AuthProvider already handles, and since their profile has no
+  // display_name yet, App.tsx routes them straight to Onboarding —
+  // not ResetPassword, courtesy of the routing guard added in the
+  // same PR that landed this branch.
+  if (alreadyExisted) {
+    const origin = req.headers.get('origin');
+    const { error: recoverErr } = await admin.auth.resetPasswordForEmail(email, {
+      redirectTo: origin ?? undefined,
+    });
+    if (recoverErr) {
+      // Log but don't fail the call — the invitation row is still
+      // recorded below, and the trainer can ask the recipient to use
+      // "Forgot password?" themselves.
+      console.warn('[invite-user] recovery email failed:', recoverErr.message);
+    }
+  }
+
   // ─── Record / upsert the invitation row ──────────────────────────
   // - cancelled_at cleared (re-invite after cancel).
   // - created_at / expires_at bumped (re-invite = fresh window).
