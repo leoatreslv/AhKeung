@@ -16,6 +16,7 @@ interface Builder extends PromiseLike<QueryResult> {
   select(cols?: string): Builder;
   eq(col: string, val: unknown): Builder;
   gte(col: string, val: unknown): Builder;
+  is(col: string, val: unknown): Builder;
   order(col: string, opts?: { ascending?: boolean }): Builder;
   limit(n: number): Builder;
   insert(row: Row | Row[]): Builder;
@@ -49,7 +50,7 @@ export function createFakeSupabase() {
   }
 
   function builder(tableName: string): Builder {
-    const filters: { col: string; val: unknown; op: 'eq' | 'gte' }[] = [];
+    const filters: { col: string; val: unknown; op: 'eq' | 'gte' | 'is' }[] = [];
     let action: 'select' | 'insert' | 'update' | 'delete' | 'upsert' = 'select';
     let payload: Row | Row[] | undefined;
     let selectedAfter = false;
@@ -63,6 +64,11 @@ export function createFakeSupabase() {
           const v = (r as Record<string, unknown>)[f.col];
           if (f.op === 'gte') {
             return (v as string | number) >= (f.val as string | number);
+          }
+          if (f.op === 'is') {
+            // PostgREST .is(col, null) → IS NULL; undefined treated same.
+            if (f.val === null) return v === null || v === undefined;
+            return v === f.val;
           }
           return v === f.val;
         });
@@ -122,6 +128,7 @@ export function createFakeSupabase() {
       },
       eq(col: string, val: unknown) { filters.push({ col, val, op: 'eq' }); return api; },
       gte(col: string, val: unknown) { filters.push({ col, val, op: 'gte' }); return api; },
+      is(col: string, val: unknown)  { filters.push({ col, val, op: 'is'  }); return api; },
       order(_col: string, _opts?: { ascending?: boolean }) {
         void _col; void _opts;
         return api;

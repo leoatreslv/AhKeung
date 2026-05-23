@@ -18,6 +18,7 @@ export interface Invitation {
   expiresAt: string;
   acceptedAt: string | null;
   cancelledAt: string | null;
+  designatedAt: string | null;
   alreadyExisted: boolean;
 }
 
@@ -43,6 +44,7 @@ interface ServerRow {
   expires_at: string;
   accepted_at: string | null;
   cancelled_at: string | null;
+  designated_at: string | null;
   already_existed: boolean;
 }
 
@@ -54,14 +56,22 @@ function rowsToInvitations(rows: ServerRow[]): Invitation[] {
     expiresAt: r.expires_at,
     acceptedAt: r.accepted_at,
     cancelledAt: r.cancelled_at,
+    designatedAt: r.designated_at,
     alreadyExisted: r.already_existed,
   }));
 }
 
 async function fetchInvitations(userId: string): Promise<{ rows: Invitation[]; error: string | null }> {
+  // `designated_at is null` filter: once a recipient has been
+  // designated (via the `+ Designate` button or the search flow),
+  // the invitation row is "done." Hiding it from the pending list
+  // keeps the trainer's view focused on rows that still need
+  // action. The row stays in the DB as audit; if it ever needs
+  // resurfacing, clear designated_at in the SQL editor.
   const res = await getSupabase().from('invitations')
-    .select('id, email, created_at, expires_at, accepted_at, cancelled_at, already_existed')
+    .select('id, email, created_at, expires_at, accepted_at, cancelled_at, designated_at, already_existed')
     .eq('inviter_id', userId)
+    .is('designated_at', null)
     .order('created_at', { ascending: false }) as
     { data: ServerRow[] | null; error: { message: string } | null };
   if (res.error) return { rows: [], error: res.error.message };

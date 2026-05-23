@@ -423,6 +423,38 @@ already; reach for these first.
 
 Retention depends on plan: 1–7 days on free, 30+ on pro.
 
+## "Invitation row still shows + Designate after I've designated them"
+
+Should not happen after migration 0012 — but if it does:
+
+1. Confirm the trigger is registered:
+   ```sql
+   select tgname from pg_trigger
+    where tgrelid = 'public.trainer_trainees'::regclass
+      and tgname = 'trainer_trainees_mark_invitation_designated';
+   ```
+2. Confirm the recipient's invitation row got stamped:
+   ```sql
+   select email, accepted_at, designated_at, cancelled_at
+     from invitations
+    where email = '<recipient-email>'
+      and inviter_id = '<your-uuid>';
+   ```
+   `designated_at` should be non-NULL. If not, run the backfill
+   for this single row by hand:
+   ```sql
+   update invitations
+      set designated_at = now()
+    where email = '<recipient-email>'
+      and inviter_id = '<your-uuid>'
+      and designated_at is null;
+   ```
+3. To resurface a previously-designated invitation (rare — e.g.
+   you want to resend the email to a designated user):
+   ```sql
+   update invitations set designated_at = null where id = '<inv-id>';
+   ```
+
 ## "Sync is stuck"
 
 The most common silent breakage. Symptoms: user actions appear to
