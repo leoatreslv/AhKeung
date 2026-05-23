@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import pkg from './package.json' with { type: 'json' };
 
 // Escape regex metachars in the origin string.
 function escapeRegex(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -69,6 +70,13 @@ export default defineConfig(({ mode }) => {
         },
       }),
     ],
+    // Single-source the app version from package.json so the UI badge,
+    // the diagnostics report payload, and any future telemetry all agree.
+    // The submitDiagnostics() client and Settings header both read
+    // import.meta.env.VITE_APP_VERSION.
+    define: {
+      'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
+    },
     server: {
       host: true,
       port: 5173,

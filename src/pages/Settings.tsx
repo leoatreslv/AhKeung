@@ -123,6 +123,9 @@ export function Settings() {
       <DiagnosticsSection />
 
       <p className="text-sm text-slate-400">Signed in as {user?.email}</p>
+      <p className="text-xs text-slate-500">
+        Version {import.meta.env.VITE_APP_VERSION ?? 'dev'}
+      </p>
       <button
         onClick={async () => { await signOut(); navigate('/'); }}
         className="bg-rose-900/40 border border-rose-800 text-rose-300 px-4 py-2 rounded-lg"
