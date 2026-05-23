@@ -128,6 +128,17 @@ export function Login() {
           >{t.login.forgotPassword}</button>
         )}
       </div>
+
+      {mode === 'password' && (
+        <details className="mt-6 text-xs text-slate-500">
+          <summary className="cursor-pointer hover:text-slate-400">
+            {t.login.linkTroubleSummary}
+          </summary>
+          <p className="mt-2 leading-relaxed">
+            {t.login.linkTroubleBody}
+          </p>
+        </details>
+      )}
     </div>
   );
 }

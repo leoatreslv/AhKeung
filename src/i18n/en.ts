@@ -201,11 +201,11 @@ export const en: Translation = {
     inviteFailed: 'Couldn\'t send the invite',
 
     pendingInvites: 'Outbound invitations',
-    inviteStatusPending: 'Pending',
-    inviteStatusAccepted: 'Accepted',
+    inviteStatusPending: 'Invited',
+    inviteStatusAccepted: 'Joined',
     inviteStatusAlreadyExisted: 'Existing user',
     inviteStatusCancelled: 'Cancelled',
-    inviteStatusExpired: 'Expired',
+    inviteStatusExpired: 'Invite expired',
     inviteCancel: 'Cancel',
     inviteCancelConfirm: 'Cancel this invitation? The recipient won\'t be able to use the link any more.',
     inviteResend: 'Resend',
@@ -250,6 +250,11 @@ export const en: Translation = {
     invalidPassword: 'Email and password don\'t match.',
     rateLimited: 'Too many requests — try again in a few minutes.',
     linkFailed: 'Couldn\'t send the link. Check your connection and try again.',
+    linkTroubleSummary: 'Invite or reset link didn\'t work?',
+    linkTroubleBody:
+      'Email scanners sometimes burn one-time links before you tap them. ' +
+      'Ask your trainer to resend the invitation, or use "Forgot password?" ' +
+      'above to get a fresh sign-in link.',
   },
 
   onboarding: {

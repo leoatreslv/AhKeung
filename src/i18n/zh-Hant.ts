@@ -201,11 +201,11 @@ export const zhHant: Translation = {
     inviteFailed: '邀請寄出失敗',
 
     pendingInvites: '已發出的邀請',
-    inviteStatusPending: '等待接受',
+    inviteStatusPending: '已邀請',
     inviteStatusAccepted: '已加入',
     inviteStatusAlreadyExisted: '舊有用戶',
     inviteStatusCancelled: '已取消',
-    inviteStatusExpired: '已過期',
+    inviteStatusExpired: '邀請已過期',
     inviteCancel: '取消',
     inviteCancelConfirm: '取消這個邀請?對方將無法再用該連結加入。',
     inviteResend: '重新寄出',
@@ -250,6 +250,10 @@ export const zhHant: Translation = {
     invalidPassword: '電郵或密碼不正確。',
     rateLimited: '請求次數過多 — 請稍候幾分鐘再試。',
     linkFailed: '寄出連結失敗,請檢查網絡再試。',
+    linkTroubleSummary: '邀請或重設連結用唔到?',
+    linkTroubleBody:
+      '部分電郵防毒系統會自動掃描連結,令一次性連結提早失效。' +
+      '可以請教練重新寄出邀請,或者用上面的「忘記密碼?」拎一條新的登入連結。',
   },
 
   onboarding: {

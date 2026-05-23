@@ -247,6 +247,8 @@ export interface Translation {
     invalidPassword: string;
     rateLimited: string;
     linkFailed: string;
+    linkTroubleSummary: string;
+    linkTroubleBody: string;
   };
 
   onboarding: {
