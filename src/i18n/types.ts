@@ -114,6 +114,13 @@ export interface Translation {
     enterValue: string;
     bmi: string;
     weightTrend: string;
+    bodyFatTrend: string;
+    bmiTrend: string;
+    periodAll: string;
+    period90: string;
+    period30: string;
+    noChartData: string;
+    deltaCaption: (deltaWithUnit: string, days: number, perWeekWithUnit: string) => string;
     history: string;
     noEntries: string;
     deleteConfirm: string;
