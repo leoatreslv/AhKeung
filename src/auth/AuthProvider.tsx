@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { getSupabase } from '../supabase';
 import { db } from '../db';
 import { stopSync, flushNow } from '../sync';
+import { withTimeout } from '../utils';
 import { log } from '../diagnostics/logger';
 import { CATEGORY } from '../diagnostics/categories';
 import { AuthContext, type AuthState, type Profile } from './useAuth';
@@ -15,23 +16,6 @@ const LAST_PROFILE_KEY = 'ahKeung.lastKnownProfile';
 // recovery surface. PR 6a wired this up for verifyOtp; PR 6c
 // extends the same defence to getSession + fetchProfile.
 const BOOTSTRAP_TIMEOUT_MS = 10_000;
-
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} timeout after ${ms}ms`)),
-          ms,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
 
 async function fetchProfile(userId: string): Promise<Profile | null> {
   const res = await withTimeout(

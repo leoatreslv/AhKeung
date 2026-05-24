@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { getSupabase } from '../supabase';
 import { useAuth } from './useAuth';
 import { useI18n } from '../i18n';
+import { withTimeout } from '../utils';
 import { log } from '../diagnostics/logger';
 import { CATEGORY } from '../diagnostics/categories';
 
 const MIN_PASSWORD = 8;
+const SUBMIT_TIMEOUT_MS = 10_000;
 
 export function Onboarding() {
   const { user, refreshProfile } = useAuth();
@@ -26,28 +28,49 @@ export function Onboarding() {
     setStatus('submitting');
     try {
       // Password first (S6): if this fails the profile stays pristine and
-      // the gate re-prompts on next open.
-      const { error: pwError } = await getSupabase().auth.updateUser({ password });
+      // the gate re-prompts on next open. Wrapped in withTimeout —
+      // PR 6d — so a hung network can't leave the button stuck on
+      // "Saving…" indefinitely (the bug that hit sylung@gmail.com).
+      const { error: pwError } = await withTimeout(
+        getSupabase().auth.updateUser({ password }),
+        SUBMIT_TIMEOUT_MS,
+        'updateUser(password)',
+      );
       if (pwError) {
         setStatus(`${t.onboarding.passwordSaveFailed}: ${pwError.message}`);
         log.error(CATEGORY.onboarding, 'password save failed', { message: pwError.message });
         return;
       }
       // Profile second. RLS lets the user update their own row.
-      const { error: profileError } = await getSupabase().from('profiles')
-        .update({ display_name: trimmedName })
-        .eq('id', user.id) as { error: { message: string } | null };
+      const { error: profileError } = await withTimeout(
+        getSupabase().from('profiles')
+          .update({ display_name: trimmedName })
+          .eq('id', user.id) as unknown as Promise<{ error: { message: string } | null }>,
+        SUBMIT_TIMEOUT_MS,
+        'profiles.update(display_name)',
+      );
       if (profileError) {
         setStatus(`${t.onboarding.profileSaveFailed}: ${profileError.message}`);
         log.error(CATEGORY.onboarding, 'profile save failed', { message: profileError.message });
         return;
       }
       log.info(CATEGORY.onboarding, 'complete');
+      // refreshProfile has its own internal timeout via PR 6c.
       await refreshProfile();
       // Once profile.displayName is populated the gate flips and Shell
       // renders. No explicit navigate needed.
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'unknown error');
+      log.error(CATEGORY.onboarding, 'submit threw', {
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      // If the gate flipped, Onboarding has already unmounted and this
+      // setStatus is a no-op. If it didn't flip (refreshProfile errored,
+      // or we returned early on a server error), reset to 'idle' so the
+      // button is enabled and the user can retry instead of staring at
+      // a stuck "Saving…" forever.
+      setStatus((s) => (s === 'submitting' ? 'idle' : s));
     }
   }
 

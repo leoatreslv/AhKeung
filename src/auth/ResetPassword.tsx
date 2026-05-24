@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { getSupabase } from '../supabase';
 import { useAuth } from './useAuth';
 import { useI18n } from '../i18n';
+import { withTimeout } from '../utils';
 
 const MIN_PASSWORD = 8;
+const SUBMIT_TIMEOUT_MS = 10_000;
 
 export function ResetPassword() {
   const { clearPasswordReset } = useAuth();
@@ -21,7 +23,13 @@ export function ResetPassword() {
     if (!canSubmit) return;
     setStatus('submitting');
     try {
-      const { error } = await getSupabase().auth.updateUser({ password });
+      // withTimeout (PR 6d) — a hung network can't leave the button
+      // stuck on "Submitting…" indefinitely.
+      const { error } = await withTimeout(
+        getSupabase().auth.updateUser({ password }),
+        SUBMIT_TIMEOUT_MS,
+        'updateUser(password)',
+      );
       if (error) {
         setStatus(`${t.resetPassword.failed}: ${error.message}`);
         return;
@@ -30,6 +38,8 @@ export function ResetPassword() {
       // The gate flips on the next render and Shell takes over.
     } catch (e) {
       setStatus(e instanceof Error ? e.message : 'unknown error');
+    } finally {
+      setStatus((s) => (s === 'submitting' ? 'idle' : s));
     }
   }
 

@@ -19,3 +19,34 @@ export const formatDuration = (ms: number) => {
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${s}s`;
 };
+
+/** Race a promise against a setTimeout-driven reject. Used at every
+ *  Supabase-call site that's on a user-blocking path (AuthProvider
+ *  bootstrap, Onboarding submit, ResetPassword submit, Settings
+ *  password change / display-name save). Without it, a hung network
+ *  request leaves the user on a "Saving…" / "Loading…" screen with
+ *  no recovery surface; with it, the call throws after `ms` and the
+ *  caller's catch can show an error or fall through to a safe state.
+ *
+ *  The timer is cleared on success so it doesn't outlive the
+ *  operation (no leaked setTimeout). `label` is included in the
+ *  rejection message so diagnostics can tell which call site
+ *  timed out. */
+export async function withTimeout<T>(
+  promise: Promise<T>, ms: number, label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timeout after ${ms}ms`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}

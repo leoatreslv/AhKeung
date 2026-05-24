@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { todayISO, weekStartISO, formatDate, formatDuration } from '../utils';
+import { todayISO, weekStartISO, formatDate, formatDuration, withTimeout } from '../utils';
 
 describe('utils', () => {
   beforeEach(() => {
@@ -51,6 +51,41 @@ describe('utils', () => {
       const out = formatDate('2025-03-15', 'en-US');
       expect(out).toMatch(/Mar/);
       expect(out).toMatch(/15/);
+    });
+  });
+
+  describe('withTimeout', () => {
+    it('resolves with the inner promise when it completes first', async () => {
+      vi.useRealTimers();  // tiny delays via real timers
+      const out = await withTimeout(Promise.resolve(42), 50, 'fast');
+      expect(out).toBe(42);
+    });
+
+    it('rejects with a labeled error when the promise outlasts the timeout', async () => {
+      // Real timers with a tiny delay — fake timers wrap Promise.race
+      // in a way that leaves the inner setTimeout-driven rejection
+      // tracked as "unhandled" by vitest even though the outer race
+      // captures it.
+      vi.useRealTimers();
+      const hanging = new Promise(() => {});
+      await expect(
+        withTimeout(hanging, 10, 'op'),
+      ).rejects.toThrow(/op timeout after 10ms/);
+    });
+
+    it('clears the timer when the promise resolves first (no leak)', async () => {
+      vi.useRealTimers();
+      const clearSpy = vi.spyOn(global, 'clearTimeout');
+      await withTimeout(Promise.resolve('ok'), 1000, 'op');
+      expect(clearSpy).toHaveBeenCalled();
+      clearSpy.mockRestore();
+    });
+
+    it('propagates the inner rejection unchanged', async () => {
+      vi.useRealTimers();
+      await expect(
+        withTimeout(Promise.reject(new Error('inner')), 100, 'op'),
+      ).rejects.toThrow('inner');
     });
   });
 });

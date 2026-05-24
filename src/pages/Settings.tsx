@@ -6,7 +6,10 @@ import { useI18n } from '../i18n';
 import { useMyTrainers, partitionByStatus } from '../useDesignations';
 import { useDisplayName } from '../useDisplayName';
 import { db } from '../db';
+import { withTimeout } from '../utils';
 import { DiagnosticsSection } from '../diagnostics/DiagnosticsSection';
+
+const SUBMIT_TIMEOUT_MS = 10_000;
 
 export function Settings() {
   const { user, profile, signOut } = useAuth();
@@ -40,8 +43,14 @@ export function Settings() {
     setSaving(true);
     setStatus('idle');
     try {
-      const { error } = await getSupabase().from('profiles')
-        .update({ display_name: name }).eq('id', user.id) as { error: { message: string } | null };
+      // withTimeout (PR 6d) — a hung network can't leave the Save
+      // button spinning indefinitely.
+      const { error } = await withTimeout(
+        getSupabase().from('profiles')
+          .update({ display_name: name }).eq('id', user.id) as unknown as Promise<{ error: { message: string } | null }>,
+        SUBMIT_TIMEOUT_MS,
+        'profiles.update(display_name)',
+      );
       if (error) {
         setStatus(`Save failed: ${error.message}`);
       } else {
@@ -213,7 +222,13 @@ function ChangePasswordSection() {
     setBusy(true);
     setStatus('idle');
     try {
-      const { error } = await getSupabase().auth.updateUser({ password });
+      // withTimeout (PR 6d) — match the Onboarding/ResetPassword
+      // pattern so a hung password update can't lock the Save button.
+      const { error } = await withTimeout(
+        getSupabase().auth.updateUser({ password }),
+        SUBMIT_TIMEOUT_MS,
+        'updateUser(password)',
+      );
       if (error) {
         setStatus(`${t.settings.passwordSaveFailed}: ${error.message}`);
       } else {
