@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { I18nProvider } from '../i18n';
 import { AuthProvider } from './AuthProvider';
 import { useAuth } from './useAuth';
@@ -83,6 +83,30 @@ describe('AuthProvider — invite/recovery URL bootstrap', () => {
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
+    expect(screen.getByTestId('status').textContent).toBe('unauthenticated');
+  });
+
+  it('getSession timeout (10s) falls through to unauthenticated', async () => {
+    vi.useFakeTimers();
+    const fake = stubUnauthenticated();
+    // No URL params — skip consumeAuthLink, go straight to getSession.
+    // Pin getSession to never resolve so only the timeout fires.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (fake.client.auth as any).getSession = () => new Promise(() => {});
+
+    renderWithAuth();
+    expect(screen.getByTestId('status').textContent).toBe('loading');
+
+    // Wrap in act() — React's state flush after the timeout-throw
+    // needs the test runner to know an update is in flight before
+    // the assertion reads the DOM.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_500);
+    });
+
+    // The IIFE's try/catch converts the timeout-throw to the
+    // unauthenticated state, so the user lands on Login instead of
+    // staying on Loading.
     expect(screen.getByTestId('status').textContent).toBe('unauthenticated');
   });
 });

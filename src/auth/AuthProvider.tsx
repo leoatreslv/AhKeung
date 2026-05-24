@@ -8,8 +8,41 @@ import { AuthContext, type AuthState, type Profile } from './useAuth';
 
 const LAST_PROFILE_KEY = 'ahKeung.lastKnownProfile';
 
+// Any auth/profile network call that exceeds this should be treated as
+// a failure rather than left hanging. The bootstrap path renders a
+// blank "Loading…" screen until status flips off 'loading'; without
+// these timeouts a single stuck request leaves the user with no
+// recovery surface. PR 6a wired this up for verifyOtp; PR 6c
+// extends the same defence to getSession + fetchProfile.
+const BOOTSTRAP_TIMEOUT_MS = 10_000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timeout after ${ms}ms`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function fetchProfile(userId: string): Promise<Profile | null> {
-  const res = await getSupabase().from('profiles').select('id, display_name, is_trainer').eq('id', userId) as { data: { id: string; display_name: string | null; is_trainer: boolean }[] | null };
+  const res = await withTimeout(
+    getSupabase().from('profiles')
+      .select('id, display_name, is_trainer')
+      .eq('id', userId) as unknown as Promise<{
+        data: { id: string; display_name: string | null; is_trainer: boolean }[] | null;
+      }>,
+    BOOTSTRAP_TIMEOUT_MS,
+    'fetchProfile',
+  );
   const row = res.data?.[0];
   if (!row) return null;
   return { id: row.id, displayName: row.display_name, isTrainer: row.is_trainer };
@@ -41,7 +74,7 @@ async function performSignOut(confirmFn: (msg: string) => boolean = window.confi
  *  auto-consume server-issued links because there's no client verifier.
  *  Without this explicit branch the invite/recovery URL silently lands on
  *  Login with no error. */
-const VERIFY_OTP_TIMEOUT_MS = 10_000;
+const VERIFY_OTP_TIMEOUT_MS = BOOTSTRAP_TIMEOUT_MS;
 
 async function consumeAuthLink(): Promise<'invite' | 'recovery' | null> {
   if (typeof window === 'undefined') return null;
@@ -58,13 +91,11 @@ async function consumeAuthLink(): Promise<'invite' | 'recovery' | null> {
   // recover via "Forgot password?" or ask the trainer to resend.
   let result: { error: { message: string } | null };
   try {
-    result = await Promise.race([
+    result = await withTimeout(
       getSupabase().auth.verifyOtp({ type, token_hash: tokenHash }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`verifyOtp timeout after ${VERIFY_OTP_TIMEOUT_MS}ms`)),
-          VERIFY_OTP_TIMEOUT_MS),
-      ),
-    ]);
+      VERIFY_OTP_TIMEOUT_MS,
+      'verifyOtp',
+    );
   } catch (e) {
     // Treat timeout / network throw the same as a returned error: log
     // it, strip the URL, return null so the IIFE proceeds to getSession
@@ -182,7 +213,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           needsResetRef.current = true;
         }
 
-        const { data: { session } } = await getSupabase().auth.getSession();
+        const { data: { session } } = await withTimeout(
+          getSupabase().auth.getSession(),
+          BOOTSTRAP_TIMEOUT_MS,
+          'getSession',
+        );
         // Clean ?code= from the URL once the exchange is resolved (success
         // or otherwise) so a hard reload doesn't try to consume it again.
         const url = new URL(window.location.href);
