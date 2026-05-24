@@ -256,6 +256,15 @@ export interface Translation {
     linkFailed: string;
     linkTroubleSummary: string;
     linkTroubleBody: string;
+    showPassword: string;
+    hidePassword: string;
+  };
+
+  resetApp: {
+    button: string;
+    confirm: string;
+    confirmOnboarding: string;
+    loadingHint: string;
   };
 
   onboarding: {

@@ -262,6 +262,15 @@ export const en: Translation = {
       'Email scanners sometimes burn one-time links before you tap them. ' +
       'Ask your trainer to resend the invitation, or use "Forgot password?" ' +
       'above to get a fresh sign-in link.',
+    showPassword: 'Show',
+    hidePassword: 'Hide',
+  },
+
+  resetApp: {
+    button: 'Reset this app',
+    confirm: 'Reset this app? You\'ll be signed out and the local cache on this device will be erased.',
+    confirmOnboarding: 'Reset this app? Your sign-in, the local cache, AND any text you\'ve typed in this form will be erased.',
+    loadingHint: 'Taking a while?',
   },
 
   onboarding: {

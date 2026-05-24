@@ -1,5 +1,6 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { HashRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom';
+import { resetApp } from './resetApp';
 import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
 import { PlanEditor } from './pages/PlanEditor';
@@ -36,7 +37,7 @@ function Guarded({ children }: { children: ReactNode }) {
     }
   }, [fullyReady]);
 
-  if (status === 'loading') return <div className="p-6 text-slate-400">Loading…</div>;
+  if (status === 'loading') return <LoadingScreen />;
   if (status === 'unauthenticated') return <Login />;
   // ResetPassword is for already-onboarded users who forgot their password.
   // If the user arrived via a recovery link but has never set a display name
@@ -64,6 +65,37 @@ function Guarded({ children }: { children: ReactNode }) {
   // First-time user — profile fetched successfully but display_name is null.
   if (profile && !profile.displayName) return <Onboarding />;
   return <>{children}</>;
+}
+
+/** The page's initial "Loading…" screen. After 12 seconds — past
+ *  AuthProvider's 10s bootstrap timeout, so by then we know
+ *  something is genuinely wrong — reveals a "Reset this app" link
+ *  so the user has a recovery escape hatch even if every other
+ *  state transition has failed. */
+function LoadingScreen() {
+  const { t } = useI18n();
+  const [showReset, setShowReset] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShowReset(true), 12_000);
+    return () => clearTimeout(timer);
+  }, []);
+  return (
+    <div className="p-6 text-slate-400 text-center">
+      <div>Loading…</div>
+      {showReset && (
+        <div className="mt-8 text-xs">
+          <div className="mb-1 text-slate-500">{t.resetApp.loadingHint}</div>
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm(t.resetApp.confirm)) void resetApp();
+            }}
+            className="text-slate-300 hover:text-slate-100 underline"
+          >{t.resetApp.button}</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function App() {

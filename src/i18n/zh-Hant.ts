@@ -261,6 +261,15 @@ export const zhHant: Translation = {
     linkTroubleBody:
       '部分電郵防毒系統會自動掃描連結,令一次性連結提早失效。' +
       '可以請教練重新寄出邀請,或者用上面的「忘記密碼?」拎一條新的登入連結。',
+    showPassword: '顯示',
+    hidePassword: '隱藏',
+  },
+
+  resetApp: {
+    button: '重設應用程式',
+    confirm: '重設應用程式?系統會將你登出並清除本機上嘅資料。',
+    confirmOnboarding: '重設應用程式?你的登入、本機資料、以及目前在表格中輸入的內容都會被清除。',
+    loadingHint: '等候時間太長?',
   },
 
   onboarding: {

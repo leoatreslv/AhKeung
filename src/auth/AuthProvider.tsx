@@ -7,7 +7,9 @@ import { log } from '../diagnostics/logger';
 import { CATEGORY } from '../diagnostics/categories';
 import { AuthContext, type AuthState, type Profile } from './useAuth';
 
-const LAST_PROFILE_KEY = 'ahKeung.lastKnownProfile';
+// Exported so resetApp() can clear the same key the SIGNED_OUT handler
+// clears, without re-declaring the literal in two places.
+export const LAST_PROFILE_KEY = 'ahKeung.lastKnownProfile';
 
 // Any auth/profile network call that exceeds this should be treated as
 // a failure rather than left hanging. The bootstrap path renders a

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { getSupabase } from '../supabase';
 import { useI18n } from '../i18n';
+import { PasswordField } from './PasswordField';
+import { resetApp } from '../resetApp';
 
 type Mode = 'password' | 'forgot';
 
@@ -90,15 +92,14 @@ export function Login() {
         </label>
 
         {mode === 'password' && (
-          <label className="block mb-4">
-            <span className="block text-sm mb-1">{t.login.passwordLabel}</span>
-            <input
-              type="password" required value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-              aria-label="password"
-            />
-          </label>
+          <PasswordField
+            value={password}
+            onChange={setPassword}
+            label={t.login.passwordLabel}
+            ariaLabel="password"
+            autoComplete="current-password"
+            required
+          />
         )}
 
         {error && <p className="text-rose-400 text-sm mb-3">{error}</p>}
@@ -137,6 +138,13 @@ export function Login() {
           <p className="mt-2 leading-relaxed">
             {t.login.linkTroubleBody}
           </p>
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm(t.resetApp.confirm)) void resetApp();
+            }}
+            className="mt-2 text-slate-400 hover:text-slate-200 underline"
+          >{t.resetApp.button}</button>
         </details>
       )}
     </div>

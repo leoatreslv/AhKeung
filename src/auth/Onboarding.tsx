@@ -5,6 +5,8 @@ import { useI18n } from '../i18n';
 import { withTimeout } from '../utils';
 import { log } from '../diagnostics/logger';
 import { CATEGORY } from '../diagnostics/categories';
+import { PasswordField } from './PasswordField';
+import { resetApp } from '../resetApp';
 
 const MIN_PASSWORD = 8;
 const SUBMIT_TIMEOUT_MS = 10_000;
@@ -90,28 +92,26 @@ export function Onboarding() {
         />
       </label>
 
-      <label className="block mb-2">
-        <span className="block text-sm mb-1">{t.onboarding.passwordLabel}</span>
-        <input
-          type="password" required value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-          aria-label="password"
-        />
-      </label>
+      <PasswordField
+        value={password}
+        onChange={setPassword}
+        label={t.onboarding.passwordLabel}
+        ariaLabel="password"
+        autoComplete="new-password"
+        required
+      />
       {password.length > 0 && !passwordOk && (
         <p className="text-amber-400 text-xs mb-3">{t.onboarding.passwordTooShort}</p>
       )}
 
-      <label className="block mb-2">
-        <span className="block text-sm mb-1">{t.onboarding.passwordConfirm}</span>
-        <input
-          type="password" required value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-          aria-label="confirm password"
-        />
-      </label>
+      <PasswordField
+        value={confirm}
+        onChange={setConfirm}
+        label={t.onboarding.passwordConfirm}
+        ariaLabel="confirm password"
+        autoComplete="new-password"
+        required
+      />
       {confirm.length > 0 && !confirmOk && (
         <p className="text-amber-400 text-xs mb-3">{t.onboarding.passwordMismatch}</p>
       )}
@@ -125,6 +125,16 @@ export function Onboarding() {
         disabled={!canSubmit}
         className="w-full bg-keung-600 hover:bg-keung-700 disabled:opacity-50 text-white py-2.5 rounded-lg font-semibold mt-4"
       >{status === 'submitting' ? t.onboarding.submitting : t.onboarding.submit}</button>
+
+      <div className="mt-6 text-center">
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm(t.resetApp.confirmOnboarding)) void resetApp();
+          }}
+          className="text-xs text-slate-500 hover:text-slate-300 underline"
+        >{t.resetApp.button}</button>
+      </div>
     </form>
   );
 }

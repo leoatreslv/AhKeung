@@ -3,6 +3,7 @@ import { getSupabase } from '../supabase';
 import { useAuth } from './useAuth';
 import { useI18n } from '../i18n';
 import { withTimeout } from '../utils';
+import { PasswordField } from './PasswordField';
 
 const MIN_PASSWORD = 8;
 const SUBMIT_TIMEOUT_MS = 10_000;
@@ -48,28 +49,26 @@ export function ResetPassword() {
       <h1 className="text-2xl font-bold mb-2 text-center">{t.resetPassword.title}</h1>
       <p className="text-sm text-slate-400 mb-6 text-center">{t.resetPassword.subtitle}</p>
 
-      <label className="block mb-2">
-        <span className="block text-sm mb-1">{t.resetPassword.passwordLabel}</span>
-        <input
-          type="password" required value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-          aria-label="new password"
-        />
-      </label>
+      <PasswordField
+        value={password}
+        onChange={setPassword}
+        label={t.resetPassword.passwordLabel}
+        ariaLabel="new password"
+        autoComplete="new-password"
+        required
+      />
       {password.length > 0 && !passwordOk && (
         <p className="text-amber-400 text-xs mb-3">{t.onboarding.passwordTooShort}</p>
       )}
 
-      <label className="block mb-2">
-        <span className="block text-sm mb-1">{t.resetPassword.confirmLabel}</span>
-        <input
-          type="password" required value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-          aria-label="confirm new password"
-        />
-      </label>
+      <PasswordField
+        value={confirm}
+        onChange={setConfirm}
+        label={t.resetPassword.confirmLabel}
+        ariaLabel="confirm new password"
+        autoComplete="new-password"
+        required
+      />
       {confirm.length > 0 && !confirmOk && (
         <p className="text-amber-400 text-xs mb-3">{t.onboarding.passwordMismatch}</p>
       )}

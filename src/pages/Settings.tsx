@@ -8,6 +8,7 @@ import { useDisplayName } from '../useDisplayName';
 import { db } from '../db';
 import { withTimeout } from '../utils';
 import { DiagnosticsSection } from '../diagnostics/DiagnosticsSection';
+import { PasswordField } from '../auth/PasswordField';
 
 const SUBMIT_TIMEOUT_MS = 10_000;
 
@@ -246,32 +247,26 @@ function ChangePasswordSection() {
   return (
     <div className="border-t border-slate-800 pt-4 space-y-2">
       <p className="text-xs uppercase tracking-wider text-slate-500">{t.settings.changePassword}</p>
-      <div>
-        <label className="text-xs text-slate-400 block mb-1">{t.settings.newPassword}</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-          aria-label="new password"
-        />
-        {password.length > 0 && !passwordOk && (
-          <p className="text-amber-400 text-xs mt-1">{t.onboarding.passwordTooShort}</p>
-        )}
-      </div>
-      <div>
-        <label className="text-xs text-slate-400 block mb-1">{t.settings.confirmPassword}</label>
-        <input
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2"
-          aria-label="confirm new password"
-        />
-        {confirm.length > 0 && !confirmOk && (
-          <p className="text-amber-400 text-xs mt-1">{t.onboarding.passwordMismatch}</p>
-        )}
-      </div>
+      <PasswordField
+        value={password}
+        onChange={setPassword}
+        label={t.settings.newPassword}
+        ariaLabel="new password"
+        autoComplete="new-password"
+      />
+      {password.length > 0 && !passwordOk && (
+        <p className="text-amber-400 text-xs mt-1">{t.onboarding.passwordTooShort}</p>
+      )}
+      <PasswordField
+        value={confirm}
+        onChange={setConfirm}
+        label={t.settings.confirmPassword}
+        ariaLabel="confirm new password"
+        autoComplete="new-password"
+      />
+      {confirm.length > 0 && !confirmOk && (
+        <p className="text-amber-400 text-xs mt-1">{t.onboarding.passwordMismatch}</p>
+      )}
       <div className="flex items-center gap-2">
         <button
           type="button"
