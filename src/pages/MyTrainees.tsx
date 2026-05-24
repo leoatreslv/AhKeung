@@ -6,6 +6,7 @@ import { useAuth } from '../auth/useAuth';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { useMyTrainees, partitionByStatus } from '../useDesignations';
 import { useDisplayName } from '../useDisplayName';
+import { useIsTrainer, setIsTrainerCache } from '../useIsTrainer';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
 import { useInvitations, classifyInvitation, type Invitation, type InvitationStatus } from '../useInvitations';
 import { inviteByEmail, cancelInvitation, designateInvitedUser } from '../invitations';
@@ -188,6 +189,13 @@ function DesignationSection({
 
 function PromoteButton({ traineeId }: { traineeId: string }) {
   const { t } = useI18n();
+  // Server-side trainer-ness — covers the case where someone was
+  // promoted in a previous session (so local `status` here is still
+  // 'idle' on remount). undefined while the lookup is in-flight; we
+  // optimistically assume false to avoid flashing a Promote button
+  // and then immediately hiding it. The hook caches per-userId for
+  // the session.
+  const alreadyTrainer = useIsTrainer(traineeId) ?? false;
   const [status, setStatus] = useState<'idle' | 'busy' | 'done' | string>('idle');
 
   async function go() {
@@ -197,13 +205,17 @@ function PromoteButton({ traineeId }: { traineeId: string }) {
     try {
       const { promoteToTrainer } = await import('../sharing');
       await promoteToTrainer(traineeId);
+      // Write-through the cache so any other PromoteButton instance
+      // (and any future re-mount of this one) reflects the change
+      // immediately, without waiting for a page reload.
+      setIsTrainerCache(traineeId, true);
       setStatus('done');
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     }
   }
 
-  if (status === 'done') {
+  if (alreadyTrainer || status === 'done') {
     return <span className="text-[10px] text-emerald-400">{t.myTrainees.promoted}</span>;
   }
   if (status !== 'idle' && status !== 'busy') {
