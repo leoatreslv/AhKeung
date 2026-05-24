@@ -198,6 +198,7 @@ export function ExerciseEditor() {
       <ImagePicker
         previewUrl={previewUrl}
         existingImagePath={existing?.imagePath ?? null}
+        existingImageVersion={existing?.updatedAt}
         pendingExisting={!!existing?.pendingImageBlob}
         onPick={onPickFile}
         onClear={() => setPickedImage(null)}
@@ -221,17 +222,18 @@ export function ExerciseEditor() {
 }
 
 function ImagePicker({
-  previewUrl, existingImagePath, pendingExisting, onPick, onClear, error,
+  previewUrl, existingImagePath, existingImageVersion, pendingExisting, onPick, onClear, error,
 }: {
   previewUrl: string | null;
   existingImagePath: string | null;
+  existingImageVersion: number | undefined;
   pendingExisting: boolean;
   onPick: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onClear: () => void;
   error: string | null;
 }) {
   const { t } = useI18n();
-  const existingUrl = imageUrl(existingImagePath);
+  const existingUrl = imageUrl(existingImagePath, existingImageVersion);
   const showingNew = !!previewUrl;
   const showingExisting = !showingNew && (!!existingUrl || pendingExisting);
 

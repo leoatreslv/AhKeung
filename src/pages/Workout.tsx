@@ -145,7 +145,7 @@ export function Workout() {
         {session.exercises.map((ex, exIdx) => {
           const meta = findEx(ex.exerciseId);
           const name = meta ? displayName(meta, locale) : ex.exerciseId;
-          const img = meta ? imageUrl(meta.imagePath) : null;
+          const img = meta ? imageUrl(meta.imagePath, meta.updatedAt) : null;
           return (
             <li key={ex.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
               <div className="p-3 flex items-center gap-2 border-b border-slate-700">
@@ -252,7 +252,7 @@ export function Workout() {
                 const row = (ex: typeof available[number]) => {
                   const name = displayName(ex, locale);
                   const isFav = favorites.has(ex.id);
-                  const img = imageUrl(ex.imagePath);
+                  const img = imageUrl(ex.imagePath, ex.updatedAt);
                   return (
                     <li key={ex.id} className="flex items-stretch border-b border-slate-800 hover:bg-slate-800">
                       <button

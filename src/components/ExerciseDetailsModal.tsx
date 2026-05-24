@@ -11,7 +11,7 @@ export function ExerciseDetailsModal({
 }) {
   const { t, locale } = useI18n();
   const name = displayName(exercise, locale);
-  const img = imageUrl(exercise.imagePath);
+  const img = imageUrl(exercise.imagePath, exercise.updatedAt);
 
   return (
     <div

@@ -64,7 +64,7 @@ export function Library() {
           const name = displayName(ex, locale);
           const isOpen = openId === ex.id;
           const isFav = favorites.has(ex.id);
-          const img = imageUrl(ex.imagePath);
+          const img = imageUrl(ex.imagePath, ex.updatedAt);
           return (
             <li key={ex.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
               <div className="flex items-stretch">

@@ -63,7 +63,7 @@ export function MyExercises() {
         <ul className="space-y-2">
           {exercises.map((ex) => {
             const name = displayName(ex, locale);
-            const img = imageUrl(ex.imagePath);
+            const img = imageUrl(ex.imagePath, ex.updatedAt);
             return (
               <li key={ex.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden flex items-stretch">
                 <Link to={`/exercises/${ex.id}`} className="flex-1 p-3 flex items-center gap-3 min-w-0">

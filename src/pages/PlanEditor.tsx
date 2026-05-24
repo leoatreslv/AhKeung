@@ -164,7 +164,7 @@ export function PlanEditor() {
             {planExercises.map((pe) => {
               const ex = findEx(pe.exerciseId);
               const exName = ex ? displayName(ex, locale) : pe.exerciseId;
-              const img = ex ? imageUrl(ex.imagePath) : null;
+              const img = ex ? imageUrl(ex.imagePath, ex.updatedAt) : null;
               return (
                 <li key={pe.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 p-3">
                   <div className="flex items-start gap-2 mb-2">
@@ -324,7 +324,7 @@ function ExercisePicker({
   const renderRow = (ex: CustomExercise) => {
     const name = displayName(ex, locale);
     const isFav = favorites.has(ex.id);
-    const img = imageUrl(ex.imagePath);
+    const img = imageUrl(ex.imagePath, ex.updatedAt);
     return (
       <li key={ex.id} className="flex items-stretch border-b border-slate-800 hover:bg-slate-800">
         <button

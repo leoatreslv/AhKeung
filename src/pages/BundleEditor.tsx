@@ -164,7 +164,7 @@ export function BundleEditor() {
             {exerciseIds.map((exId, idx) => {
               const ex = findEx(exId);
               const name = ex ? displayName(ex, locale) : exId;
-              const img = ex ? imageUrl(ex.imagePath) : null;
+              const img = ex ? imageUrl(ex.imagePath, ex.updatedAt) : null;
               return (
                 <li key={exId} className="bg-slate-800 rounded-xl border border-slate-700 p-3 flex items-center gap-2">
                   {img ? (
@@ -260,7 +260,7 @@ function ExercisePicker({
         <ul className="overflow-y-auto flex-1">
           {list.map((ex) => {
             const name = displayName(ex, locale);
-            const img = imageUrl(ex.imagePath);
+            const img = imageUrl(ex.imagePath, ex.updatedAt);
             return (
               <li key={ex.id}>
                 <button
