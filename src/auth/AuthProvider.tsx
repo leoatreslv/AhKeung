@@ -41,6 +41,8 @@ async function performSignOut(confirmFn: (msg: string) => boolean = window.confi
  *  auto-consume server-issued links because there's no client verifier.
  *  Without this explicit branch the invite/recovery URL silently lands on
  *  Login with no error. */
+const VERIFY_OTP_TIMEOUT_MS = 10_000;
+
 async function consumeAuthLink(): Promise<'invite' | 'recovery' | null> {
   if (typeof window === 'undefined') return null;
   const url = new URL(window.location.href);
@@ -48,7 +50,33 @@ async function consumeAuthLink(): Promise<'invite' | 'recovery' | null> {
   const tokenHash = url.searchParams.get('token_hash');
   if (!tokenHash || (type !== 'invite' && type !== 'recovery')) return null;
 
-  const { error } = await getSupabase().auth.verifyOtp({ type, token_hash: tokenHash });
+  // Race verifyOtp against a 10s timeout. Without the timeout, a network
+  // blip or a server-side hang would leave the IIFE awaiting forever and
+  // the user stuck on the 'loading' screen with no signal. With it, a
+  // hung verifyOtp throws, the IIFE's catch flips status to
+  // 'unauthenticated', and the user lands on Login where they can
+  // recover via "Forgot password?" or ask the trainer to resend.
+  let result: { error: { message: string } | null };
+  try {
+    result = await Promise.race([
+      getSupabase().auth.verifyOtp({ type, token_hash: tokenHash }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`verifyOtp timeout after ${VERIFY_OTP_TIMEOUT_MS}ms`)),
+          VERIFY_OTP_TIMEOUT_MS),
+      ),
+    ]);
+  } catch (e) {
+    // Treat timeout / network throw the same as a returned error: log
+    // it, strip the URL, return null so the IIFE proceeds to getSession
+    // (which will see no session and flip to 'unauthenticated').
+    url.searchParams.delete('token_hash');
+    url.searchParams.delete('type');
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    log.error(CATEGORY.auth, 'verifyOtp threw', {
+      type, message: e instanceof Error ? e.message : String(e),
+    });
+    return null;
+  }
 
   // Strip whether it worked or not — a failed token shouldn't be retried
   // on hard refresh. The UI will report the error via Login state.
@@ -56,8 +84,8 @@ async function consumeAuthLink(): Promise<'invite' | 'recovery' | null> {
   url.searchParams.delete('type');
   window.history.replaceState({}, '', url.pathname + url.search + url.hash);
 
-  if (error) {
-    log.error(CATEGORY.auth, 'verifyOtp failed', { type, message: error.message });
+  if (result.error) {
+    log.error(CATEGORY.auth, 'verifyOtp failed', { type, message: result.error.message });
     return null;
   }
   log.info(CATEGORY.auth, 'verifyOtp ok', { type });

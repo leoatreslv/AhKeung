@@ -15,14 +15,19 @@ function buildRealClient(): SupabaseClient {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
-      // PKCE binds the magic link to a verifier stored in this browser's
-      // localStorage. Defeats email-scanner pre-fetch (Gmail safe browsing,
-      // Outlook SafeLinks) since the scanner has no verifier and gets bounced;
-      // only the real tap from the same browser can complete the exchange.
-      // Trade-off: dashboard "Send/Generate Magic Link" and cross-device link
-      // clicks stop working — those don't go through signInWithOtp, so no
-      // verifier exists for them.
+      // detectSessionInUrl=false: supabase-js's auto-detect only looks for
+      // ?code= (PKCE OAuth code exchange) and #access_token= (implicit
+      // flow). We use neither: invite + recovery links arrive as
+      // ?type=…&token_hash=… and are handled explicitly in
+      // src/auth/AuthProvider.tsx#consumeAuthLink via verifyOtp. Disabling
+      // auto-detect removes a code path we don't use — no functional
+      // change for our flows, but eliminates one potential source of
+      // races between our manual handler and supabase-js's internal
+      // bootstrap.
+      detectSessionInUrl: false,
+      // PKCE is still required for the password-recovery email
+      // (resetPasswordForEmail emits ?code= links protected by a
+      // verifier stored in this browser's localStorage). Don't drop it.
       flowType: 'pkce',
     },
   });
