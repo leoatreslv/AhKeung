@@ -43,7 +43,7 @@ export function AdminInvites() {
     if (result.ok) {
       setToast(result.alreadyExisted ? t.adminInvites.alreadyExistedToast : t.adminInvites.sentToast);
       setEmail('');
-      setReloadAt(Date.now());
+      setReloadAt((n) => n + 1);
     } else {
       setToast(t.adminInvites.failedToast + (result.error ?? 'unknown'));
     }
@@ -51,7 +51,7 @@ export function AdminInvites() {
 
   async function onCancel(id: string) {
     await cancelInvitation(id);
-    setReloadAt(Date.now());
+    setReloadAt((n) => n + 1);
   }
 
   async function onResend(emailToResend: string) {
@@ -59,7 +59,7 @@ export function AdminInvites() {
     const result = await inviteByEmail(emailToResend);
     if (result.ok) {
       setToast(result.alreadyExisted ? t.adminInvites.alreadyExistedToast : t.adminInvites.sentToast);
-      setReloadAt(Date.now());
+      setReloadAt((n) => n + 1);
     } else {
       setToast(t.adminInvites.failedToast + (result.error ?? 'unknown'));
     }

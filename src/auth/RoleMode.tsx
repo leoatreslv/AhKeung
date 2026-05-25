@@ -32,27 +32,36 @@ function readStoredMode(available: Mode[]): Mode {
 export function RoleModeProvider({ profile, children }: { profile: Profile; children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- only the flags affect the result; depending on the whole profile would rerun on every displayName edit
   const availableModes = useMemo(() => deriveAvailable(profile), [profile.isTrainer, profile.isAdmin]);
-  const [mode, setModeState] = useState<Mode>(() => readStoredMode(availableModes));
+  // `storedMode` is the user's *preference* (what they last picked via the
+  // switcher). The *effective* `mode` below is derived: if the preference
+  // is still in `availableModes`, use it; otherwise fall back to trainee.
+  // This split lets us avoid setState-in-effect for the demotion case —
+  // the derivation handles it during render, and an effect only does the
+  // external-system side effect (localStorage cleanup).
+  const [storedMode, setStoredMode] = useState<Mode>(() => readStoredMode(availableModes));
+  const mode: Mode = availableModes.includes(storedMode) ? storedMode : 'trainee';
 
   const setMode = useCallback((m: Mode) => {
     if (!availableModes.includes(m)) return;
-    setModeState(m);
+    setStoredMode(m);
     try { localStorage.setItem(ROLE_MODE_STORAGE_KEY, m); } catch { /* ignore */ }
   }, [availableModes]);
 
   const setModeTransient = useCallback((m: Mode) => {
     if (!availableModes.includes(m)) return;
-    setModeState(m);
+    setStoredMode(m);
   }, [availableModes]);
 
-  // Mid-session demotion: if availableModes no longer includes the current
-  // mode, fall back to trainee and clear the persisted preference.
+  // Mid-session demotion: when the stored preference is no longer in
+  // availableModes (e.g. admin demoted us while we were active), clear
+  // the localStorage entry. The effective `mode` already fell back to
+  // 'trainee' via the derivation above, so no setState is needed here —
+  // only the external-system sync.
   useEffect(() => {
-    if (!availableModes.includes(mode)) {
-      setModeState('trainee');
+    if (!availableModes.includes(storedMode)) {
       try { localStorage.removeItem(ROLE_MODE_STORAGE_KEY); } catch { /* ignore */ }
     }
-  }, [availableModes, mode]);
+  }, [availableModes, storedMode]);
 
   const value = useMemo<RoleModeContextValue>(() => ({
     mode, availableModes, setMode, setModeTransient,
@@ -61,6 +70,7 @@ export function RoleModeProvider({ profile, children }: { profile: Profile; chil
   return <RoleModeContext.Provider value={value}>{children}</RoleModeContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- hook lives next to its provider; splitting would only help HMR
 export function useRoleMode(): RoleModeContextValue {
   const v = useContext(RoleModeContext);
   if (!v) throw new Error('useRoleMode must be used inside <RoleModeProvider>');

@@ -3,7 +3,7 @@ import { render, screen, act } from '@testing-library/react';
 import { RoleModeProvider, useRoleMode, ROLE_MODE_STORAGE_KEY } from './RoleMode';
 import type { Profile } from './useAuth';
 
-function probe() {
+function Probe() {
   const ctx = useRoleMode();
   return (
     <div>
@@ -14,8 +14,6 @@ function probe() {
     </div>
   );
 }
-
-function Probe() { return probe(); }
 
 function withProvider(profile: Profile) {
   return render(<RoleModeProvider profile={profile}><Probe /></RoleModeProvider>);
