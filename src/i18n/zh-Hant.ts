@@ -365,4 +365,9 @@ export const zhHant: Translation = {
     promoted: '已升級',
     empty: '無用戶。',
   },
+
+  adminAudit: {
+    title: '紀錄', older: '較舊 →', newer: '← 較新', empty: '無記錄。',
+    filters: { invite: '邀請', designation: '指派', promotion: '升級', share: '分享', sync: '同步' },
+  },
 };

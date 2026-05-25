@@ -353,4 +353,9 @@ export interface Translation {
     promoted: string;
     empty: string;
   };
+
+  adminAudit: {
+    title: string; older: string; newer: string; empty: string;
+    filters: { invite: string; designation: string; promotion: string; share: string; sync: string };
+  };
 }

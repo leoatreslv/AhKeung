@@ -366,4 +366,9 @@ export const en: Translation = {
     promoted: 'Promoted',
     empty: 'No users found.',
   },
+
+  adminAudit: {
+    title: 'Audit log', older: 'Older →', newer: '← Newer', empty: 'No events.',
+    filters: { invite: 'Invite', designation: 'Designation', promotion: 'Promotion', share: 'Share', sync: 'Sync' },
+  },
 };
