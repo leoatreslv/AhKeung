@@ -6,6 +6,9 @@ export const en: Translation = {
 
   tabs: { home: 'Home', plans: 'Plans', library: 'Library', metrics: 'Metrics' },
 
+  trainerTabs: { dashboard: 'Dashboard', trainees: 'Trainees', exercises: 'Exercises', bundles: 'Bundles' },
+  adminTabs:   { invites: 'Invites',     users: 'Users',       audit: 'Audit' },
+
   modeSwitcher: { trainee: 'Trainee', trainer: 'Trainer', admin: 'Admin' },
 
   muscleGroup: {

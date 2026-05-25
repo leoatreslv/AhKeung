@@ -13,6 +13,9 @@ export interface Translation {
 
   tabs: { home: string; plans: string; library: string; metrics: string };
 
+  trainerTabs: { dashboard: string; trainees: string; exercises: string; bundles: string };
+  adminTabs:   { invites: string;  users: string;     audit: string };
+
   modeSwitcher: { trainee: string; trainer: string; admin: string };
 
   muscleGroup: Record<MuscleGroup, string>;

@@ -14,12 +14,15 @@ import { MyBundles } from './pages/MyBundles';
 import { BundleEditor } from './pages/BundleEditor';
 import { MyTrainees } from './pages/MyTrainees';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { ModeSwitcher } from './components/ModeSwitcher';
 import { useI18n } from './i18n';
+import type { Translation } from './i18n/types';
 import { useAuth } from './auth/useAuth';
 import { Login } from './auth/Login';
 import { Onboarding } from './auth/Onboarding';
 import { ResetPassword } from './auth/ResetPassword';
 import { startSync, stopSync, flushNow } from './sync';
+import { RoleModeProvider, useRoleMode, type Mode } from './auth/RoleMode';
 
 function Guarded({ children }: { children: ReactNode }) {
   const { status, profile, profileFetchError, needsPasswordReset, refreshProfile } = useAuth();
@@ -64,7 +67,8 @@ function Guarded({ children }: { children: ReactNode }) {
   }
   // First-time user — profile fetched successfully but display_name is null.
   if (profile && !profile.displayName) return <Onboarding />;
-  return <>{children}</>;
+  const readyProfile = profile!;
+  return <RoleModeProvider profile={readyProfile}>{children}</RoleModeProvider>;
 }
 
 /** The page's initial "Loading…" screen. After 12 seconds — past
@@ -106,9 +110,36 @@ function App() {
   );
 }
 
+const NAV_BY_MODE: Record<Mode, { to: string; icon: string; labelKey: string; end?: boolean }[]> = {
+  trainee: [
+    { to: '/',        icon: '🏠', labelKey: 'tabs.home', end: true },
+    { to: '/plans',   icon: '📋', labelKey: 'tabs.plans' },
+    { to: '/library', icon: '📚', labelKey: 'tabs.library' },
+    { to: '/metrics', icon: '📈', labelKey: 'tabs.metrics' },
+  ],
+  trainer: [
+    { to: '/trainer/trainees',  icon: '👥', labelKey: 'trainerTabs.trainees' },
+    { to: '/trainer/exercises', icon: '🏋️', labelKey: 'trainerTabs.exercises' },
+    { to: '/trainer/bundles',   icon: '📦', labelKey: 'trainerTabs.bundles' },
+    { to: '/trainer',           icon: '🏠', labelKey: 'trainerTabs.dashboard', end: true },
+  ],
+  admin: [
+    { to: '/admin/invites', icon: '✉️', labelKey: 'adminTabs.invites' },
+    { to: '/admin/users',   icon: '👤', labelKey: 'adminTabs.users' },
+    { to: '/admin/audit',   icon: '📜', labelKey: 'adminTabs.audit' },
+  ],
+};
+
+function resolveLabel(t: Translation, key: string): string {
+  // Two-segment dotted key like "tabs.home" or "trainerTabs.dashboard".
+  const [group, leaf] = key.split('.');
+  return (t as unknown as Record<string, Record<string, string>>)[group][leaf];
+}
+
 function Shell() {
   const { t, locale } = useI18n();
   const { profile, user } = useAuth();
+  const { mode } = useRoleMode();
   // Prefer the saved display name; fall back to the local-part of email so
   // the user always sees *something* about themselves in the header rather
   // than just the app name. Locale-aware greeting so it doesn't say "Hi,"
@@ -117,7 +148,12 @@ function Shell() {
   const greeting = locale === 'zh-Hant' ? `${name} 你好` : `Hi, ${name}`;
   return (
     <div className="flex flex-col h-full max-w-md mx-auto bg-slate-900 text-slate-100">
-      <header className="px-4 pt-6 pb-3 border-b border-slate-800 flex items-center gap-2 sticky top-0 z-10 bg-slate-900/95 backdrop-blur">
+      <header
+        className={
+          'px-4 pt-6 pb-3 border-b flex items-center gap-2 sticky top-0 z-10 bg-slate-900/95 backdrop-blur ' +
+          (mode === 'trainer' ? 'border-keung-600/60' : mode === 'admin' ? 'border-amber-600/60' : 'border-slate-800')
+        }
+      >
         <img
           src={`${import.meta.env.BASE_URL}logo.png`}
           alt=""
@@ -131,6 +167,7 @@ function Shell() {
         </div>
         <div className="flex items-center gap-2">
           <LanguageSwitcher />
+          <ModeSwitcher />
           <NavLink to="/settings" aria-label="settings" className="text-slate-300 text-xl">⚙️</NavLink>
         </div>
       </header>
@@ -157,11 +194,13 @@ function Shell() {
         </Routes>
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto border-t border-slate-800 bg-slate-900/95 backdrop-blur grid grid-cols-4 z-10">
-        <TabLink to="/" icon="🏠" label={t.tabs.home} end />
-        <TabLink to="/plans" icon="📋" label={t.tabs.plans} />
-        <TabLink to="/library" icon="📚" label={t.tabs.library} />
-        <TabLink to="/metrics" icon="📈" label={t.tabs.metrics} />
+      <nav
+        className="fixed bottom-0 left-0 right-0 max-w-md mx-auto border-t border-slate-800 bg-slate-900/95 backdrop-blur grid z-10"
+        style={{ gridTemplateColumns: `repeat(${NAV_BY_MODE[mode].length}, minmax(0, 1fr))` }}
+      >
+        {NAV_BY_MODE[mode].map((tab) => (
+          <TabLink key={tab.to} to={tab.to} icon={tab.icon} label={resolveLabel(t, tab.labelKey)} end={tab.end} />
+        ))}
       </nav>
     </div>
   );
