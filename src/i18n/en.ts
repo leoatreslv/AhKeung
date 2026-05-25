@@ -354,4 +354,16 @@ export const en: Translation = {
     alreadyExistedToast: 'That email already had an account.',
     failedToast: 'Send failed: ',
   },
+
+  adminUsers: {
+    searchPlaceholder: 'Search by display name…',
+    badgeTrainer: 'Trainer',
+    badgeAdmin:   'Admin',
+    promoteTrainer: 'Promote to Trainer',
+    promoteAdmin:   'Promote to Admin',
+    confirmPromoteTrainer: 'Promote this user to Trainer?',
+    confirmPromoteAdmin:   'Promote this user to Admin?',
+    promoted: 'Promoted',
+    empty: 'No users found.',
+  },
 };

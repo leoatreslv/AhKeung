@@ -69,7 +69,7 @@ export async function sharePlan(planId: string, recipientId: string): Promise<st
   return res.data;
 }
 
-/** Promotes another user to trainer. Callable only by trainers; the
+/** Promotes another user to trainer. Callable only by admins; the
  *  promote_to_trainer SECURITY DEFINER RPC enforces that and bypasses
  *  the profiles_write tightening that otherwise forbids self-elevation. */
 export async function promoteToTrainer(target: string): Promise<void> {
@@ -80,4 +80,16 @@ export async function promoteToTrainer(target: string): Promise<void> {
     throw new Error(res.error.message);
   }
   log.info(CATEGORY.auth, 'promoted', { target });
+}
+
+/** Promotes another user to admin. Callable only by admins; the
+ *  promote_to_admin SECURITY DEFINER RPC enforces that. */
+export async function promoteToAdmin(target: string): Promise<void> {
+  const res = await getSupabase().rpc('promote_to_admin', { target }) as
+    { error: { message: string } | null };
+  if (res.error) {
+    log.error(CATEGORY.auth, 'promote admin failed', { target, message: res.error.message });
+    throw new Error(res.error.message);
+  }
+  log.info(CATEGORY.auth, 'promoted admin', { target });
 }

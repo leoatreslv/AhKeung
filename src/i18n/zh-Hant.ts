@@ -353,4 +353,16 @@ export const zhHant: Translation = {
     alreadyExistedToast: '該電郵已有帳戶。',
     failedToast: '發送失敗：',
   },
+
+  adminUsers: {
+    searchPlaceholder: '搜尋顯示名稱…',
+    badgeTrainer: '教練',
+    badgeAdmin:   '管理員',
+    promoteTrainer: '升為教練',
+    promoteAdmin:   '升為管理員',
+    confirmPromoteTrainer: '確定升為教練？',
+    confirmPromoteAdmin:   '確定升為管理員？',
+    promoted: '已升級',
+    empty: '無用戶。',
+  },
 };

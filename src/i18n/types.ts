@@ -341,4 +341,16 @@ export interface Translation {
     resend: string; cancel: string;
     sentToast: string; alreadyExistedToast: string; failedToast: string;
   };
+
+  adminUsers: {
+    searchPlaceholder: string;
+    badgeTrainer: string;
+    badgeAdmin: string;
+    promoteTrainer: string;
+    promoteAdmin: string;
+    confirmPromoteTrainer: string;
+    confirmPromoteAdmin: string;
+    promoted: string;
+    empty: string;
+  };
 }
