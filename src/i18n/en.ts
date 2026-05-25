@@ -339,4 +339,19 @@ export const en: Translation = {
     designateButton: '+ Designate a user',
     empty: 'No pending designations.',
   },
+
+  adminInvites: {
+    sendTitle: 'Send an invite',
+    sendButton: 'Send',
+    emailPlaceholder: 'email@example.com',
+    pendingTitle: 'Pending — not yet accepted',
+    pendingEmpty: 'No pending invitations.',
+    awaitingTitle: 'Accepted — awaiting trainer designation',
+    awaitingEmpty: 'No accepted invitations awaiting designation.',
+    resend: 'Resend',
+    cancel: 'Cancel',
+    sentToast: 'Invitation sent.',
+    alreadyExistedToast: 'That email already had an account.',
+    failedToast: 'Send failed: ',
+  },
 };

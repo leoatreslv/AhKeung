@@ -338,4 +338,19 @@ export const zhHant: Translation = {
     designateButton: '+ 指派用戶',
     empty: '冇待回應指派。',
   },
+
+  adminInvites: {
+    sendTitle: '發送邀請',
+    sendButton: '發送',
+    emailPlaceholder: '電郵@example.com',
+    pendingTitle: '待對方接受',
+    pendingEmpty: '冇待接受邀請。',
+    awaitingTitle: '已接受 — 等待教練指派',
+    awaitingEmpty: '冇待指派邀請。',
+    resend: '重發',
+    cancel: '取消',
+    sentToast: '邀請已發送。',
+    alreadyExistedToast: '該電郵已有帳戶。',
+    failedToast: '發送失敗：',
+  },
 };

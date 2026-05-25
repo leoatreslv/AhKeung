@@ -333,4 +333,12 @@ export interface Translation {
     designateButton: string;
     empty: string;
   };
+
+  adminInvites: {
+    sendTitle: string; sendButton: string; emailPlaceholder: string;
+    pendingTitle: string; pendingEmpty: string;
+    awaitingTitle: string; awaitingEmpty: string;
+    resend: string; cancel: string;
+    sentToast: string; alreadyExistedToast: string; failedToast: string;
+  };
 }
