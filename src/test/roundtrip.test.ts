@@ -32,7 +32,7 @@ describe('trainer creates exercise → designation → share → trainee uses in
     stubAuthenticatedUser({ id: TRAINER, isTrainer: true });
     const fake = getActiveFake();
     fake.tables.profiles.push({
-      id: TRAINEE, display_name: 'Trainee', is_trainer: false,
+      id: TRAINEE, display_name: 'Trainee', is_trainer: false, is_admin: false,
       created_at: new Date().toISOString(),
     });
 

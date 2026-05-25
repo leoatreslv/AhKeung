@@ -213,7 +213,7 @@ export function createFakeSupabase() {
       // Ensure a profile row exists (simulates handle_new_user trigger).
       if (!tables.profiles.find((p) => p.id === userId)) {
         tables.profiles.push({
-          id: userId, display_name: null, is_trainer: false, created_at: nowIso(),
+          id: userId, display_name: null, is_trainer: false, is_admin: false, created_at: nowIso(),
         });
       }
       notify('SIGNED_IN');
@@ -222,6 +222,10 @@ export function createFakeSupabase() {
     setTrainer(userId: string, isTrainer: boolean) {
       const p = tables.profiles.find((x) => x.id === userId);
       if (p) p.is_trainer = isTrainer;
+    },
+    setAdmin(userId: string, isAdmin: boolean) {
+      const p = tables.profiles.find((x) => x.id === userId);
+      if (p) p.is_admin = isAdmin;
     },
     rowOf(table: string, id: string) {
       return (tables[table] ?? []).find((r) => r.id === id) as Row;
