@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getSupabase } from '../supabase';
 import { useI18n } from '../i18n';
 import { useAuth } from '../auth/useAuth';
@@ -22,6 +22,12 @@ export function MyTrainees() {
   const [results, setResults] = useState<ProfileSummary[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [params] = useSearchParams();
+  useEffect(() => {
+    if (params.get('focus') === 'search') searchRef.current?.focus();
+  }, [params]);
 
   if (profile && !profile.isTrainer) {
     return (
@@ -100,6 +106,7 @@ export function MyTrainees() {
         <label className="text-xs text-slate-400 block mb-1">{t.myTrainees.addByName}</label>
         <div className="flex gap-2">
           <input
+            ref={searchRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void runSearch(); }}

@@ -332,4 +332,11 @@ export const en: Translation = {
     sentHelp: 'They can look up your report using just this code.',
     sendFailed: 'Send failed',
   },
+
+  trainerDashboard: {
+    pendingTitle: 'Pending designations',
+    recentTitle:  'Recent trainee activity',
+    designateButton: '+ Designate a user',
+    empty: 'No pending designations.',
+  },
 };

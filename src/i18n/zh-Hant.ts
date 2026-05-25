@@ -331,4 +331,11 @@ export const zhHant: Translation = {
     sentHelp: '他們可以用這個代碼查到你提交的報告。',
     sendFailed: '傳送失敗',
   },
+
+  trainerDashboard: {
+    pendingTitle: '待回應指派',
+    recentTitle:  '學員近期活動',
+    designateButton: '+ 指派用戶',
+    empty: '冇待回應指派。',
+  },
 };

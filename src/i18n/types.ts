@@ -326,4 +326,11 @@ export interface Translation {
     sentHelp: string;
     sendFailed: string;
   };
+
+  trainerDashboard: {
+    pendingTitle: string;
+    recentTitle: string;
+    designateButton: string;
+    empty: string;
+  };
 }
