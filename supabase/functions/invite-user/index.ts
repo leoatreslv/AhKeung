@@ -122,10 +122,10 @@ async function handle(req: Request): Promise<Response> {
   // ─── Look up the inviter's display name for the email template ───
   // The template (Dashboard → Authentication → Email Templates → "Invite
   // user") can reference {{ .Data.inviter_name }} to personalise the
-  // greeting. Falls back to "your admin" if the admin hasn't set a
+  // greeting. Falls back to "your trainer" if the trainer hasn't set a
   // display name yet, or if the lookup throws/fails for any reason
   // (the invite must not 500 because we couldn't read one column).
-  let inviterName = 'your admin';
+  let inviterName = 'your trainer';
   try {
     const { data: inviterRow } = await admin.from('profiles')
       .select('display_name').eq('id', user.id).maybeSingle() as
