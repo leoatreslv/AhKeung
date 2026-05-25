@@ -38,23 +38,6 @@ export async function inviteByEmail(email: string): Promise<InviteResult> {
   return data ?? { ok: false, error: 'no response' };
 }
 
-/** Calls the designate_invited_user RPC. The server resolves the
- *  recipient's auth.users.id from the invitation's email and inserts
- *  a 'pending' trainer_trainees row. Returns the trainee's user_id
- *  so the caller can refresh local state. */
-export async function designateInvitedUser(invitationId: string): Promise<string> {
-  const { data, error } = await getSupabase().rpc('designate_invited_user', {
-    invitation_id: invitationId,
-  }) as { data: string | null; error: { message: string } | null };
-  if (error) {
-    log.error(CATEGORY.invite, 'designate failed', { invitationId, message: error.message });
-    throw new Error(error.message);
-  }
-  if (!data) throw new Error('designate_invited_user returned no id');
-  log.info(CATEGORY.invite, 'designated', { invitationId, traineeId: data });
-  return data;
-}
-
 export async function cancelInvitation(id: string): Promise<void> {
   const { error } = await getSupabase().from('invitations')
     .update({ cancelled_at: new Date().toISOString() })

@@ -6,11 +6,7 @@ import { useAuth } from '../auth/useAuth';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { useMyTrainees, partitionByStatus } from '../useDesignations';
 import { useDisplayName } from '../useDisplayName';
-import { useIsTrainer, setIsTrainerCache } from '../useIsTrainer';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
-import { useInvitations, classifyInvitation, type Invitation, type InvitationStatus } from '../useInvitations';
-import { inviteByEmail, cancelInvitation, designateInvitedUser } from '../invitations';
-import { flushNow } from '../sync';
 
 interface ProfileSummary { id: string; display_name: string | null }
 
@@ -138,11 +134,7 @@ export function MyTrainees() {
         )}
       </div>
 
-      <InviteSection />
-
-      <PendingInvitesSection />
-
-      <DesignationSection title={t.myTrainees.accepted} rows={accepted} chip="bg-emerald-600/30 text-emerald-300 border-emerald-700/50" onRemove={undesignate} canPromote />
+      <DesignationSection title={t.myTrainees.accepted} rows={accepted} chip="bg-emerald-600/30 text-emerald-300 border-emerald-700/50" onRemove={undesignate} />
       <DesignationSection title={t.myTrainees.pending}  rows={pending}  chip="bg-amber-600/30 text-amber-300 border-amber-700/50"      onRemove={undesignate} />
       <DesignationSection title={t.myTrainees.declined} rows={declined} chip="bg-slate-600/30 text-slate-400 border-slate-600"          onRemove={undesignate} />
 
@@ -156,13 +148,12 @@ export function MyTrainees() {
 }
 
 function DesignationSection({
-  title, rows, chip, onRemove, canPromote,
+  title, rows, chip, onRemove,
 }: {
   title: string;
   rows: { traineeId: string; designatedAt: number }[];
   chip: string;
   onRemove: (traineeId: string) => void;
-  canPromote?: boolean;
 }) {
   const { t } = useI18n();
   if (rows.length === 0) return null;
@@ -174,7 +165,6 @@ function DesignationSection({
           <li key={r.traineeId} className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex items-center gap-2">
             <TraineeName id={r.traineeId} className="flex-1 text-sm" />
             <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${chip}`}>{title}</span>
-            {canPromote && <PromoteButton traineeId={r.traineeId} />}
             <button
               onClick={() => onRemove(r.traineeId)}
               aria-label={t.myTrainees.remove}
@@ -187,251 +177,7 @@ function DesignationSection({
   );
 }
 
-function PromoteButton({ traineeId }: { traineeId: string }) {
-  const { t } = useI18n();
-  // Server-side trainer-ness — covers the case where someone was
-  // promoted in a previous session (so local `status` here is still
-  // 'idle' on remount). undefined while the lookup is in-flight; we
-  // optimistically assume false to avoid flashing a Promote button
-  // and then immediately hiding it. The hook caches per-userId for
-  // the session.
-  const alreadyTrainer = useIsTrainer(traineeId) ?? false;
-  const [status, setStatus] = useState<'idle' | 'busy' | 'done' | string>('idle');
-
-  async function go() {
-    if (status === 'busy' || status === 'done') return;
-    if (!confirm(t.myTrainees.promoteConfirm)) return;
-    setStatus('busy');
-    try {
-      const { promoteToTrainer } = await import('../sharing');
-      await promoteToTrainer(traineeId);
-      // Write-through the cache so any other PromoteButton instance
-      // (and any future re-mount of this one) reflects the change
-      // immediately, without waiting for a page reload.
-      setIsTrainerCache(traineeId, true);
-      setStatus('done');
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  if (alreadyTrainer || status === 'done') {
-    return <span className="text-[10px] text-emerald-400">{t.myTrainees.promoted}</span>;
-  }
-  if (status !== 'idle' && status !== 'busy') {
-    return <span className="text-[10px] text-rose-400" title={status}>!</span>;
-  }
-  return (
-    <button
-      onClick={() => void go()}
-      disabled={status === 'busy'}
-      className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border bg-keung-600/30 text-keung-300 border-keung-700/50 disabled:opacity-50"
-    >
-      {status === 'busy' ? '…' : t.myTrainees.promote}
-    </button>
-  );
-}
-
 function TraineeName({ id, className }: { id: string; className?: string }) {
   const name = useDisplayName(id);
   return <span className={className}>{name ?? '…'}</span>;
-}
-
-// ─── Invite-by-email ───────────────────────────────────────────────
-
-function InviteSection() {
-  const { t } = useI18n();
-  const { refresh } = useInvitations();
-  const [email, setEmail] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<{ kind: 'ok' | 'already' | 'error'; msg: string } | null>(null);
-
-  async function send() {
-    const trimmed = email.trim();
-    if (!trimmed || busy) return;
-    setBusy(true);
-    setStatus(null);
-    try {
-      const res = await inviteByEmail(trimmed);
-      if (!res.ok) {
-        const err = res.error ?? '';
-        if (/rate limit/i.test(err)) {
-          setStatus({ kind: 'error', msg: t.myTrainees.inviteRateLimited });
-        } else {
-          setStatus({ kind: 'error', msg: `${t.myTrainees.inviteFailed}: ${err}` });
-        }
-        return;
-      }
-      if (res.alreadyExisted) {
-        setStatus({ kind: 'already', msg: t.myTrainees.inviteAlreadyExisted });
-      } else {
-        setStatus({ kind: 'ok', msg: t.myTrainees.inviteSent });
-      }
-      setEmail('');
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div>
-      <label className="text-xs text-slate-400 block mb-1">{t.myTrainees.inviteByEmail}</label>
-      <div className="flex gap-2">
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void send(); }}
-          placeholder={t.myTrainees.inviteEmailPlaceholder}
-          className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-base"
-        />
-        <button
-          type="button"
-          onClick={() => void send()}
-          disabled={busy || !email.trim()}
-          className="px-3 bg-keung-600 hover:bg-keung-700 disabled:opacity-50 rounded-lg text-sm font-semibold"
-        >{busy ? t.myTrainees.inviteSending : t.myTrainees.inviteSend}</button>
-      </div>
-      {status && (
-        <p className={`text-xs mt-2 ${
-          status.kind === 'ok'      ? 'text-emerald-400'
-          : status.kind === 'already' ? 'text-amber-400'
-          :                             'text-rose-400'
-        }`}>{status.msg}</p>
-      )}
-    </div>
-  );
-}
-
-// ─── Outbound invitations list ─────────────────────────────────────
-
-function PendingInvitesSection() {
-  const { t } = useI18n();
-  const { list, refresh } = useInvitations();
-  if (!list || list.length === 0) return null;
-  return (
-    <div>
-      <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-1.5">{t.myTrainees.pendingInvites}</h3>
-      <ul className="space-y-1">
-        {list.map((inv) => (
-          <InvitationRow key={inv.id} inv={inv} onChange={() => void refresh()} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function InvitationRow({ inv, onChange }: { inv: Invitation; onChange: () => void }) {
-  const { t } = useI18n();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const status = classifyInvitation(inv);
-  const statusLabel = statusToLabel(status, t);
-  const chipClass = statusToChip(status);
-
-  async function cancel() {
-    if (busy) return;
-    if (!confirm(t.myTrainees.inviteCancelConfirm)) return;
-    setBusy(true);
-    setError(null);
-    try { await cancelInvitation(inv.id); onChange(); }
-    finally { setBusy(false); }
-  }
-
-  async function resend() {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // The Edge Function's on-conflict upsert handles a re-invite:
-      // clears cancelled_at, bumps created_at/expires_at, re-issues
-      // the auth email.
-      await inviteByEmail(inv.email);
-      onChange();
-    } finally { setBusy(false); }
-  }
-
-  async function designate() {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await designateInvitedUser(inv.id);
-      // The RPC inserted the trainer_trainees row server-side; trigger
-      // a sync round-trip so the trainer's local Dexie picks it up and
-      // the Designations section refreshes immediately rather than
-      // waiting for the next 60s pull tick.
-      await flushNow();
-      onChange();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t.myTrainees.inviteDesignateFailed);
-    } finally { setBusy(false); }
-  }
-
-  // 'already-existed' rows triggered a recovery email rather than a
-  // fresh invite. That email has its own short Supabase expiry (~1h);
-  // we don't track it, so allow resend unconditionally until the
-  // trainer cancels. Same for cancel — let the trainer mop up
-  // already-existed and accepted rows once the recipient has
-  // completed onboarding (and after Designate, in the accepted case).
-  const canCancel = status === 'pending' || status === 'already-existed' || status === 'accepted';
-  const canResend = status === 'pending' || status === 'expired'
-                 || status === 'cancelled' || status === 'already-existed';
-  const canDesignate = status === 'accepted';
-
-  return (
-    <li className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <span className="flex-1 text-sm truncate" title={inv.email}>{inv.email}</span>
-        <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full border ${chipClass}`}>{statusLabel}</span>
-        {canDesignate && (
-          <button
-            type="button"
-            onClick={() => void designate()}
-            disabled={busy}
-            className="text-xs text-keung-500 hover:text-keung-400 disabled:opacity-50 px-1"
-          >{t.myTrainees.inviteDesignate}</button>
-        )}
-        {canResend && (
-          <button
-            type="button"
-            onClick={() => void resend()}
-            disabled={busy}
-            className="text-xs text-keung-500 hover:text-keung-400 disabled:opacity-50 px-1"
-          >{t.myTrainees.inviteResend}</button>
-        )}
-        {canCancel && (
-          <button
-            type="button"
-            onClick={() => void cancel()}
-            disabled={busy}
-            aria-label={t.myTrainees.inviteCancel}
-            className="text-slate-500 hover:text-rose-400 disabled:opacity-50 text-sm px-1"
-          >✕</button>
-        )}
-      </div>
-      {error && <p className="text-rose-400 text-xs">{error}</p>}
-    </li>
-  );
-}
-
-function statusToLabel(s: InvitationStatus, t: ReturnType<typeof useI18n>['t']): string {
-  switch (s) {
-    case 'pending':         return t.myTrainees.inviteStatusPending;
-    case 'accepted':        return t.myTrainees.inviteStatusAccepted;
-    case 'already-existed': return t.myTrainees.inviteStatusAlreadyExisted;
-    case 'cancelled':       return t.myTrainees.inviteStatusCancelled;
-    case 'expired':         return t.myTrainees.inviteStatusExpired;
-  }
-}
-
-function statusToChip(s: InvitationStatus): string {
-  switch (s) {
-    case 'pending':         return 'bg-amber-600/30 text-amber-300 border-amber-700/50';
-    case 'accepted':        return 'bg-emerald-600/30 text-emerald-300 border-emerald-700/50';
-    case 'already-existed': return 'bg-slate-600/30 text-slate-300 border-slate-600';
-    case 'cancelled':       return 'bg-slate-600/30 text-slate-400 border-slate-600';
-    case 'expired':         return 'bg-rose-600/20 text-rose-300 border-rose-700/40';
-  }
 }
