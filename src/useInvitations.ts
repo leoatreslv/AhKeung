@@ -1,10 +1,10 @@
-// Trainer's outbound invitations. RLS scopes the query to the
-// current trainer's own rows (inviter_id = auth.uid()), so we just
+// Admin's outbound invitations. RLS scopes the query to the
+// current admin's own rows (inviter_id = auth.uid()), so we just
 // SELECT * and order client-side.
 //
 // Not Dexie-backed: invitations are inherently online (sending one
 // hits the Edge Function, listing them hits Supabase directly), so
-// caching adds little. The trainer's My Trainees screen calls
+// caching adds little. The admin's invitations screen calls
 // refresh() after every mutation.
 
 import { useCallback, useEffect, useState } from 'react';
@@ -89,8 +89,8 @@ export function useInvitations(): {
 
   // Initial fetch on userId change. The setState calls live inside a
   // .then() callback (async boundary), satisfying the lint rule's
-  // "no setState directly in effect body" check. MyTrainees gates on
-  // isTrainer above this hook, so userId is non-null in practice.
+  // "no setState directly in effect body" check. AdminInvites is wrapped in
+  // ModeGate allowedIn={['admin']}, so userId is non-null in practice.
   useEffect(() => {
     if (!userId) return;
     let cancelled = false;
