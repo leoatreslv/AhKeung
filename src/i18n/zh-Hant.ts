@@ -6,6 +6,8 @@ export const zhHant: Translation = {
 
   tabs: { home: '首頁', plans: '計劃', library: '動作', metrics: '紀錄' },
 
+  modeSwitcher: { trainee: '學員', trainer: '教練', admin: '管理員' },
+
   muscleGroup: {
     chest: '胸',
     back: '背',

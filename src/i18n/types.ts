@@ -13,6 +13,8 @@ export interface Translation {
 
   tabs: { home: string; plans: string; library: string; metrics: string };
 
+  modeSwitcher: { trainee: string; trainer: string; admin: string };
+
   muscleGroup: Record<MuscleGroup, string>;
 
   common: {
