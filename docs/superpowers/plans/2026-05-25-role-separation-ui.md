@@ -117,9 +117,23 @@ Use the Supabase MCP `deploy_edge_function` tool. Read the modified file and pas
 
 Expected: deploy succeeds.
 
-- [ ] **Step 4: Smoke-test the live function**
+- [ ] **Step 4: Smoke-test the live function — STOP-THE-LINE gate**
 
-Trigger an invite from the app yourself (you're admin). Confirm: the function returns 200 OK, an audit event `invite.sent` lands in `audit_events` (verify via MCP `execute_sql`). If the function returns 403, the migration's `is_admin` seed didn't take — go back to Task 1.
+Trigger an invite from the app yourself (you're admin). Confirm: the function returns 200 OK, an audit event `invite.sent` lands in `audit_events` (verify via MCP `execute_sql`).
+
+**If the function returns 403**, the migration's `is_admin` seed didn't take. Two options:
+
+(a) Re-run the seed UPDATE via MCP:
+```sql
+update profiles p set is_admin = true
+  from auth.users u
+ where u.id = p.id and lower(u.email) = 'leo@reslv.io';
+```
+Then retry the invite.
+
+(b) **Roll back the Edge Function deploy.** Check out the prior version of `supabase/functions/invite-user/index.ts` (e.g. `git show HEAD~1:supabase/functions/invite-user/index.ts > /tmp/prev.ts`), redeploy it via MCP `deploy_edge_function` with the prior body. This restores the `is_trainer` guard so existing trainers can invite while you diagnose. Then go fix Task 1 and re-apply Task 2.
+
+Do NOT proceed to Task 3 until the smoke test passes.
 
 - [ ] **Step 5: Commit**
 
@@ -136,54 +150,48 @@ git commit -m "invite-user: gate on is_admin instead of is_trainer"
 - Modify: `src/auth/useAuth.ts`
 - Modify: `src/auth/AuthProvider.tsx`
 - Modify: `src/sync/mapping.ts`
-- Test: `src/auth/AuthProvider.cache.test.tsx` (new)
+- Create: `src/auth/profileCache.ts`
+- Test: `src/auth/profileCache.test.ts`
 
-- [ ] **Step 1: Write failing test for cache hydration**
+**Note:** the cache-defaulting logic is extracted into a pure helper (`rehydrateCachedProfile`) so the test is self-contained — no provider mount, no fakeSupabase, no async — and the AuthProvider just calls the helper.
 
-Create `src/auth/AuthProvider.cache.test.tsx`:
+- [ ] **Step 1: Write the failing test for the pure helper**
 
-```tsx
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import { AuthProvider } from './AuthProvider';
-import { useAuth, LAST_PROFILE_KEY } from './useAuth';
-import { stubAuthenticatedUser, clearAuthStub } from '../test/authStub';
+Create `src/auth/profileCache.test.ts`:
 
-function Probe() {
-  const { profile } = useAuth();
-  return (
-    <div>
-      <span data-testid="trainer">{String(profile?.isTrainer)}</span>
-      <span data-testid="admin">{String(profile?.isAdmin)}</span>
-    </div>
-  );
-}
+```ts
+import { describe, it, expect } from 'vitest';
+import { rehydrateCachedProfile } from './profileCache';
 
-describe('AuthProvider cache hydration', () => {
-  beforeEach(() => clearAuthStub());
+describe('rehydrateCachedProfile', () => {
+  it('defaults isAdmin to false when missing (v1 cache shape)', () => {
+    const result = rehydrateCachedProfile({ id: 'u', displayName: 'P', isTrainer: true });
+    expect(result.isAdmin).toBe(false);
+    expect(result.isTrainer).toBe(true);
+    expect(result.displayName).toBe('P');
+  });
 
-  it('defaults isAdmin to false when reading a v1-shaped cache (no isAdmin field)', async () => {
-    // Simulate a cache written before the is_admin column existed.
-    const v1Cache = { id: 'u-1', displayName: 'Pat', isTrainer: true };
-    localStorage.setItem(LAST_PROFILE_KEY, JSON.stringify(v1Cache));
-    stubAuthenticatedUser({ id: 'u-1' });
-    // Force the fetch path to fail so the cache is used.
-    // (fakeSupabase's profile select will return the new shape; we rely on
-    //  the rehydration path being exercised by the provider's bootstrap.)
-    render(<AuthProvider><Probe /></AuthProvider>);
-    await waitFor(() => {
-      expect(screen.getByTestId('admin').textContent).not.toBe('undefined');
+  it('preserves all fields when present (v2 cache shape)', () => {
+    const result = rehydrateCachedProfile({
+      id: 'u', displayName: 'P', isTrainer: false, isAdmin: true,
     });
-    // Whether the fresh fetch or the cache wins, the shape must include isAdmin.
-    expect(['true', 'false']).toContain(screen.getByTestId('admin').textContent);
+    expect(result.isAdmin).toBe(true);
+    expect(result.displayName).toBe('P');
+  });
+
+  it('defaults displayName to null and the flags to false when missing', () => {
+    const result = rehydrateCachedProfile({ id: 'u' });
+    expect(result.displayName).toBeNull();
+    expect(result.isTrainer).toBe(false);
+    expect(result.isAdmin).toBe(false);
   });
 });
 ```
 
-- [ ] **Step 2: Run the test (it should fail because `isAdmin` is not on Profile yet)**
+- [ ] **Step 2: Run the test (fails, module not found)**
 
-Run: `npx vitest run src/auth/AuthProvider.cache.test.tsx`
-Expected: FAIL — `Property 'isAdmin' does not exist on type 'Profile'.`
+Run: `npx vitest run src/auth/profileCache.test.ts`
+Expected: FAIL — `Cannot find module './profileCache'`.
 
 - [ ] **Step 3: Add `isAdmin` to the Profile interface**
 
@@ -193,28 +201,46 @@ Edit `src/auth/useAuth.ts` line 3:
 export interface Profile { id: string; displayName: string | null; isTrainer: boolean; isAdmin: boolean; }
 ```
 
-- [ ] **Step 4: Update AuthProvider's select + mapper + cache rehydration**
+- [ ] **Step 4: Create the pure helper**
+
+Create `src/auth/profileCache.ts`:
+
+```ts
+import type { Profile } from './useAuth';
+
+/** Defaults the new `isAdmin` field when reading a cached profile written
+ *  before the field existed (v1 cache shape). Used by AuthProvider's
+ *  cache rehydration branch so an offline boot after the role-separation
+ *  deploy doesn't surface `isAdmin: undefined`. */
+export function rehydrateCachedProfile(parsed: Partial<Profile> & { id: string }): Profile {
+  return {
+    id: parsed.id,
+    displayName: parsed.displayName ?? null,
+    isTrainer: parsed.isTrainer ?? false,
+    isAdmin: parsed.isAdmin ?? false,
+  };
+}
+```
+
+- [ ] **Step 5: Update AuthProvider's select + mapper + cache rehydration**
 
 Edit `src/auth/AuthProvider.tsx`:
 
 - Line 25: change the select string from `'id, display_name, is_trainer'` to `'id, display_name, is_trainer, is_admin'`.
-- Line 27 type annotation: change the inline type to `{ id: string; display_name: string | null; is_trainer: boolean; is_admin: boolean }[]`.
+- Line 27 inline type annotation: extend to `{ id: string; display_name: string | null; is_trainer: boolean; is_admin: boolean }[]`.
 - Line 34 mapper: change `return { id: row.id, displayName: row.display_name, isTrainer: row.is_trainer };` to `return { id: row.id, displayName: row.display_name, isTrainer: row.is_trainer, isAdmin: row.is_admin };`.
-- In the cache-read branch around lines 164–167, change `profile = JSON.parse(cached) as Profile;` (or equivalent) to:
+- In the cache-read branch around line 164–167, replace the existing `JSON.parse(cached) as Profile` style with:
 
 ```ts
+import { rehydrateCachedProfile } from './profileCache';
+// ...
 const parsed = JSON.parse(cached) as Partial<Profile> & { id: string };
-profile = {
-  id: parsed.id,
-  displayName: parsed.displayName ?? null,
-  isTrainer: parsed.isTrainer ?? false,
-  isAdmin: parsed.isAdmin ?? false,
-};
+profile = rehydrateCachedProfile(parsed);
 ```
 
-(Read the actual file first to match the exact surrounding code; the key invariant is `isAdmin` defaults to `false` when missing.)
+(Read the actual file first to match the surrounding code; the key invariant is `isAdmin` always defaults to `false` when not in the cached blob.)
 
-- [ ] **Step 5: Add `is_admin` to the sync allowlist**
+- [ ] **Step 6: Add `is_admin` to the sync allowlist**
 
 Edit `src/sync/mapping.ts`:
 
@@ -222,20 +248,20 @@ Edit `src/sync/mapping.ts`:
 profiles:  new Set(['id', 'display_name', 'is_trainer', 'is_admin', 'created_at']),
 ```
 
-- [ ] **Step 6: Re-run the test, then full type-check**
+- [ ] **Step 7: Re-run the test + full type-check**
 
 ```
-npx vitest run src/auth/AuthProvider.cache.test.tsx
+npx vitest run src/auth/profileCache.test.ts
 npx tsc -b --noEmit
 ```
 
-Expected: test passes; type-check passes (you may see new errors elsewhere where stub profiles are missing `isAdmin` — leave them for Task 4).
+Expected: 3 cases pass. Type-check passes — except possibly the test files in `src/test/` whose fakeSupabase has not yet been updated. If `tsc` complains there, it means the fakeSupabase row literal is being inferred against a `Profile`-shape — Task 4 lands the fix. You may also see a Vitest run flag `is_admin` missing in test fakes — also Task 4.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/auth/useAuth.ts src/auth/AuthProvider.tsx src/sync/mapping.ts src/auth/AuthProvider.cache.test.tsx
-git commit -m "auth: add isAdmin to Profile, hydrate is_admin from server + cache default"
+git add src/auth/useAuth.ts src/auth/AuthProvider.tsx src/auth/profileCache.ts src/auth/profileCache.test.ts src/sync/mapping.ts
+git commit -m "auth: add isAdmin to Profile, extract rehydrateCachedProfile helper with default"
 ```
 
 ---
@@ -286,32 +312,21 @@ export function stubAuthenticatedUser(opts: {
 }
 ```
 
-- [ ] **Step 4: Run all tests to see what's still broken**
+- [ ] **Step 4: Sanity-check for any inline Profile literals (likely none)**
 
-Run: `npx vitest run --reporter=verbose`
+Run: `grep -rn "isTrainer:" src/test src/sync 2>/dev/null | grep -v "isTrainer?"`
 
-Expected: type errors in tests that build Profile objects without `isAdmin`. Identify each file (likely `src/test/sync-roundtrip.test.tsx`, `src/test/workflow.test.tsx`, and any inline `Profile` construction).
+Expected: very few hits (the codebase routes everything through `stubAuthenticatedUser({ isTrainer: true })`, not raw Profile literals). If you do find one, add `isAdmin: false` to it. If none, nothing to do.
 
-- [ ] **Step 5: Add `isAdmin: false` to every inline Profile stub the test suite builds**
-
-For each test file flagged in step 4, find inline `Profile`-shaped object literals and add `isAdmin: false`. Examples to check:
-- `src/test/sync-roundtrip.test.tsx`
-- `src/test/workflow.test.tsx`
-- `src/test/exerciseEditor.test.tsx`
-- `src/test/sharing.test.tsx`
-- `src/test/invitations.test.ts`
-
-Use `grep -n "isTrainer:" src/test src/sync 2>/dev/null` to find candidate sites. Each should become `isTrainer: ..., isAdmin: false` unless the test specifically asserts admin behavior.
-
-- [ ] **Step 6: Re-run all tests**
+- [ ] **Step 5: Run all tests**
 
 Run: `npx vitest run`
-Expected: type errors gone; tests pass (some may still fail for unrelated reasons — leave those alone for now and note them).
+Expected: everything that passed before still passes. The new `is_admin: false` in fakeSupabase + the new `isAdmin?` option in authStub are additive — no behavior change for existing tests.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/test/fakeSupabase.ts src/test/authStub.ts src/test/*.test.* src/sync/*.test.*
+git add src/test/fakeSupabase.ts src/test/authStub.ts
 git commit -m "test stubs: add isAdmin support to fake Supabase + authStub"
 ```
 
@@ -449,6 +464,7 @@ function readStoredMode(available: Mode[]): Mode {
 }
 
 export function RoleModeProvider({ profile, children }: { profile: Profile; children: ReactNode }) {
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only the flags affect the result; depending on the whole profile would rerun on every displayName edit
   const availableModes = useMemo(() => deriveAvailable(profile), [profile.isTrainer, profile.isAdmin]);
   const [mode, setModeState] = useState<Mode>(() => readStoredMode(availableModes));
 
@@ -546,9 +562,10 @@ describe('ModeGate', () => {
     expect(screen.getByText('TRAINER PAGE')).toBeInTheDocument();
   });
 
-  it('auto-switches transiently when current mode wrong but allowedIn is available', () => {
+  it('auto-switches transiently when current mode wrong but allowedIn is available', async () => {
     setup(profile({ isTrainer: true }), '/trainer'); // mode defaults to trainee
-    expect(screen.getByText('TRAINER PAGE')).toBeInTheDocument();
+    // findByText awaits the useEffect that flips mode and re-renders children.
+    expect(await screen.findByText('TRAINER PAGE')).toBeInTheDocument();
     // Critical: must NOT have persisted the new mode.
     expect(localStorage.getItem(ROLE_MODE_STORAGE_KEY)).toBeNull();
   });
@@ -1128,29 +1145,35 @@ Find the `function PromoteButton({ traineeId })` definition (around line 190 per
 
 - [ ] **Step 4: Delete the `designateInvitedUser` export from `src/invitations.ts`**
 
-In `src/invitations.ts`, delete the entire `export async function designateInvitedUser(invitationId: string): Promise<string> { ... }` block (lines 41–56 per spec). The file should now only export `inviteByEmail`, `cancelInvitation`, and the `InviteResult` interface.
+In `src/invitations.ts`, delete the entire `export async function designateInvitedUser(invitationId: string): Promise<string> { ... }` block (lines 45–56). The file should now only export `inviteByEmail`, `cancelInvitation`, and the `InviteResult` interface.
 
-- [ ] **Step 5: Remove dead tests**
+- [ ] **Step 5: Delete the now-dead test file**
 
-In `src/test/invitations.test.ts`, remove every test that imports or calls `designateInvitedUser`. If a `describe` block exists exclusively for that helper, delete the whole block. Keep tests for `inviteByEmail` and `cancelInvitation`.
+The entire `src/test/invitations.test.ts` file is one `describe('designateInvitedUser', …)` block — no tests for `inviteByEmail` or `cancelInvitation` exist there. Delete the whole file:
 
-Verify with: `grep -n "designateInvitedUser" src/test/invitations.test.ts` — zero matches.
+```bash
+git rm src/test/invitations.test.ts
+```
+
+Verify with: `ls src/test/invitations.test.ts` — should report "No such file".
 
 - [ ] **Step 6: Type-check + run tests**
 
 ```
 npx tsc -b --noEmit
-npx vitest run src/test/invitations.test.ts
+npx vitest run
 ```
 
-Expected: both pass.
+Expected: both pass. No more references to the dropped RPC anywhere.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/pages/MyTrainees.tsx src/invitations.ts src/test/invitations.test.ts
+git add src/pages/MyTrainees.tsx src/invitations.ts
 git commit -m "MyTrainees: strip invite UI, PromoteButton, designate-from-invitation"
 ```
+
+(The `git rm` from step 5 is already staged; this commit includes it.)
 
 ---
 
@@ -1681,17 +1704,26 @@ git commit -m "AdminUsers: search + promote-to-trainer + promote-to-admin"
 
 In `src/i18n/types.ts`:
 ```ts
-adminAudit: { title: string; older: string; newer: string; empty: string };
+adminAudit: {
+  title: string; older: string; newer: string; empty: string;
+  filters: { invite: string; designation: string; promotion: string; share: string; sync: string };
+};
 ```
 
 In `en.ts`:
 ```ts
-adminAudit: { title: 'Audit log', older: 'Older →', newer: '← Newer', empty: 'No events.' },
+adminAudit: {
+  title: 'Audit log', older: 'Older →', newer: '← Newer', empty: 'No events.',
+  filters: { invite: 'Invite', designation: 'Designation', promotion: 'Promotion', share: 'Share', sync: 'Sync' },
+},
 ```
 
 In `zh-Hant.ts`:
 ```ts
-adminAudit: { title: '紀錄', older: '較舊 →', newer: '← 較新', empty: '無記錄。' },
+adminAudit: {
+  title: '紀錄', older: '較舊 →', newer: '← 較新', empty: '無記錄。',
+  filters: { invite: '邀請', designation: '指派', promotion: '升級', share: '分享', sync: '同步' },
+},
 ```
 
 - [ ] **Step 2: Implement AdminAudit**
@@ -1714,11 +1746,23 @@ interface AuditRow {
 
 const PAGE = 50;
 
+type FilterKey = 'invite' | 'designation' | 'promotion' | 'share' | 'sync';
+
+// Map filter chip → which event_type prefixes to keep when active.
+const FILTER_PREFIXES: Record<FilterKey, string[]> = {
+  invite:      ['invite.'],
+  designation: ['designation.'],
+  promotion:   ['trainer.promoted', 'admin.promoted'],
+  share:       ['share.'],
+  sync:        ['sync.'],
+};
+
 export function AdminAudit() {
   const { t } = useI18n();
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [offset, setOffset] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [active, setActive] = useState<Set<FilterKey>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -1732,14 +1776,48 @@ export function AdminAudit() {
     return () => { cancelled = true; };
   }, [offset]);
 
+  function toggle(k: FilterKey) {
+    setActive((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  }
+
+  const visible = active.size === 0 ? rows : rows.filter((r) => {
+    for (const k of active) {
+      if (FILTER_PREFIXES[k].some((p) => r.event_type.startsWith(p) || r.event_type === p)) return true;
+    }
+    return false;
+  });
+
   return (
     <div className="p-4 space-y-3 text-slate-100">
       <h2 className="text-lg font-bold">{t.adminAudit.title}</h2>
-      {rows.length === 0 ? (
+
+      <div className="flex flex-wrap gap-1">
+        {(Object.keys(FILTER_PREFIXES) as FilterKey[]).map((k) => {
+          const on = active.has(k);
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => toggle(k)}
+              className={
+                'text-[11px] px-2 py-0.5 rounded-full border ' +
+                (on ? 'bg-keung-600/30 border-keung-600/60 text-keung-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400')
+              }
+            >{t.adminAudit.filters[k]}</button>
+          );
+        })}
+      </div>
+
+      {visible.length === 0 ? (
         <p className="text-slate-500 text-sm">{t.adminAudit.empty}</p>
       ) : (
         <ul className="space-y-1">
-          {rows.map((r) => (
+          {visible.map((r) => (
             <li key={r.id} className="bg-slate-800 rounded-lg border border-slate-700 px-3 py-2 text-xs">
               <button
                 type="button"
@@ -1777,6 +1855,8 @@ export function AdminAudit() {
   );
 }
 ```
+
+Note: filtering happens client-side over the current page. With multi-select chips active, a page may render fewer than 50 visible rows (because non-matching rows were on the page but hidden). Acceptable for MVP — server-side filtering would require an `event_type` `or(like.invite.%,like.share.%,...)` predicate, which is straightforward but not yet wired.
 
 - [ ] **Step 3: Type-check + commit**
 
@@ -1942,10 +2022,10 @@ EOF
 - [x] In-app caller rewrites — Task 10
 - [x] Settings refactor (badge stack, drop grid) — Task 11
 - [x] MyTrainees refactor (strip invite + PromoteButton + designate-from-invitation) — Task 12
-- [x] TrainerDashboard — Task 13
+- [x] TrainerDashboard (pending designations + quick action) — Task 13. **Spec deviation:** the spec's "Recent trainee activity" section is deferred — see Task 13 step 2 note. Add as a follow-up if Leo wants it before merge.
 - [x] AdminInvites — Task 14
 - [x] AdminUsers + promoteToAdmin helper — Task 15
-- [x] AdminAudit — Task 16
+- [x] AdminAudit including the spec's filter chip row (invite / designation / promotion / share / sync, multi-select, client-side filtering of the current page) — Task 16
 - [x] Doc-comment cleanup (useInvitations, sharing, invite-user) — Tasks 2, 15, 17
 - [x] RLS regression verification — Task 18
 - [x] E2E smoke (all 3 modes + transient auto-switch) — Task 19
