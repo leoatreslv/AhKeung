@@ -6,6 +6,7 @@ import { withTimeout } from '../utils';
 import { log } from '../diagnostics/logger';
 import { CATEGORY } from '../diagnostics/categories';
 import { AuthContext, type AuthState, type Profile } from './useAuth';
+import { rehydrateCachedProfile } from './profileCache';
 
 // Exported so resetApp() can clear the same key the SIGNED_OUT handler
 // clears, without re-declaring the literal in two places.
@@ -22,16 +23,16 @@ const BOOTSTRAP_TIMEOUT_MS = 10_000;
 async function fetchProfile(userId: string): Promise<Profile | null> {
   const res = await withTimeout(
     getSupabase().from('profiles')
-      .select('id, display_name, is_trainer')
+      .select('id, display_name, is_trainer, is_admin')
       .eq('id', userId) as unknown as Promise<{
-        data: { id: string; display_name: string | null; is_trainer: boolean }[] | null;
+        data: { id: string; display_name: string | null; is_trainer: boolean; is_admin: boolean }[] | null;
       }>,
     BOOTSTRAP_TIMEOUT_MS,
     'fetchProfile',
   );
   const row = res.data?.[0];
   if (!row) return null;
-  return { id: row.id, displayName: row.display_name, isTrainer: row.is_trainer };
+  return { id: row.id, displayName: row.display_name, isTrainer: row.is_trainer, isAdmin: row.is_admin };
 }
 
 /** Sign-out helper. Stops sync first, attempts to drain the queue, optionally
@@ -163,7 +164,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // user" and silently route to onboarding.
         const cached = localStorage.getItem(LAST_PROFILE_KEY);
         if (cached) {
-          try { profile = JSON.parse(cached) as Profile; }
+          try {
+            const parsed = JSON.parse(cached) as Partial<Profile> & { id: string };
+            profile = rehydrateCachedProfile(parsed);
+          }
           catch { localStorage.removeItem(LAST_PROFILE_KEY); profile = null; }
         }
         if (!profile) profileFetchError = e instanceof Error ? e.message : 'profile fetch failed';

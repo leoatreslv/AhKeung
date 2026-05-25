@@ -9,7 +9,7 @@ const INBOUND_FIELDS: Record<string, Set<string>> = {
   metrics:   new Set(['id', 'user_id', 'date', 'weight_kg', 'height_cm',
                       'body_fat_pct', 'notes', 'updated_at', 'deleted_at']),
   favorites: new Set(['user_id', 'exercise_id', 'added_at', 'updated_at', 'deleted_at']),
-  profiles:  new Set(['id', 'display_name', 'is_trainer', 'created_at']),
+  profiles:  new Set(['id', 'display_name', 'is_trainer', 'is_admin', 'created_at']),
 
   // Keys are the *client* (camelCase Dexie) table names — matches the
   // argument pullWorker passes to fromServerRow().

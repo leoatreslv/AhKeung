@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 
-export interface Profile { id: string; displayName: string | null; isTrainer: boolean; }
+export interface Profile { id: string; displayName: string | null; isTrainer: boolean; isAdmin: boolean; }
 export type AuthStatus = 'loading' | 'unauthenticated' | 'authenticated';
 
 export interface AuthState {
