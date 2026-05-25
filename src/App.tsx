@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { HashRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom';
+import { HashRouter, NavLink, Route, Routes, Navigate, useParams } from 'react-router-dom';
 import { resetApp } from './resetApp';
 import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
@@ -13,6 +13,11 @@ import { ExerciseEditor } from './pages/ExerciseEditor';
 import { MyBundles } from './pages/MyBundles';
 import { BundleEditor } from './pages/BundleEditor';
 import { MyTrainees } from './pages/MyTrainees';
+import { ModeGate } from './components/ModeGate';
+import { TrainerDashboard } from './pages/TrainerDashboard';
+import { AdminInvites } from './pages/AdminInvites';
+import { AdminUsers } from './pages/AdminUsers';
+import { AdminAudit } from './pages/AdminAudit';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ModeSwitcher } from './components/ModeSwitcher';
 import { useI18n } from './i18n';
@@ -174,22 +179,43 @@ function Shell() {
 
       <main className="flex-1 overflow-y-auto pb-20">
         <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/plans" element={<Plans />} />
-          <Route path="/plans/new" element={<PlanEditor />} />
-          <Route path="/plans/:id" element={<PlanEditor />} />
-          <Route path="/workout" element={<Workout />} />
-          <Route path="/workout/:planId" element={<Workout />} />
-          <Route path="/library" element={<Library />} />
-          <Route path="/metrics" element={<Metrics />} />
+          {/* Trainee mode */}
+          <Route path="/" element={<ModeGate allowedIn={['trainee']}><Home /></ModeGate>} />
+          <Route path="/plans" element={<ModeGate allowedIn={['trainee']}><Plans /></ModeGate>} />
+          <Route path="/plans/new" element={<ModeGate allowedIn={['trainee']}><PlanEditor /></ModeGate>} />
+          <Route path="/plans/:id" element={<ModeGate allowedIn={['trainee']}><PlanEditor /></ModeGate>} />
+          <Route path="/workout" element={<ModeGate allowedIn={['trainee']}><Workout /></ModeGate>} />
+          <Route path="/workout/:planId" element={<ModeGate allowedIn={['trainee']}><Workout /></ModeGate>} />
+          <Route path="/library" element={<ModeGate allowedIn={['trainee']}><Library /></ModeGate>} />
+          <Route path="/metrics" element={<ModeGate allowedIn={['trainee']}><Metrics /></ModeGate>} />
+
+          {/* Trainer mode */}
+          <Route path="/trainer" element={<ModeGate allowedIn={['trainer']}><TrainerDashboard /></ModeGate>} />
+          <Route path="/trainer/trainees" element={<ModeGate allowedIn={['trainer']}><MyTrainees /></ModeGate>} />
+          <Route path="/trainer/exercises" element={<ModeGate allowedIn={['trainer']}><MyExercises /></ModeGate>} />
+          <Route path="/trainer/exercises/new" element={<ModeGate allowedIn={['trainer']}><ExerciseEditor /></ModeGate>} />
+          <Route path="/trainer/exercises/:id" element={<ModeGate allowedIn={['trainer']}><ExerciseEditor /></ModeGate>} />
+          <Route path="/trainer/bundles" element={<ModeGate allowedIn={['trainer']}><MyBundles /></ModeGate>} />
+          <Route path="/trainer/bundles/new" element={<ModeGate allowedIn={['trainer']}><BundleEditor /></ModeGate>} />
+          <Route path="/trainer/bundles/:id" element={<ModeGate allowedIn={['trainer']}><BundleEditor /></ModeGate>} />
+
+          {/* Admin mode */}
+          <Route path="/admin/invites" element={<ModeGate allowedIn={['admin']}><AdminInvites /></ModeGate>} />
+          <Route path="/admin/users" element={<ModeGate allowedIn={['admin']}><AdminUsers /></ModeGate>} />
+          <Route path="/admin/audit" element={<ModeGate allowedIn={['admin']}><AdminAudit /></ModeGate>} />
+
+          {/* Cross-mode */}
           <Route path="/settings" element={<Settings />} />
-          <Route path="/exercises" element={<MyExercises />} />
-          <Route path="/exercises/new" element={<ExerciseEditor />} />
-          <Route path="/exercises/:id" element={<ExerciseEditor />} />
-          <Route path="/bundles" element={<MyBundles />} />
-          <Route path="/bundles/new" element={<BundleEditor />} />
-          <Route path="/bundles/:id" element={<BundleEditor />} />
-          <Route path="/trainees" element={<MyTrainees />} />
+
+          {/* Legacy URL redirects for external bookmarks */}
+          <Route path="/exercises" element={<Navigate to="/trainer/exercises" replace />} />
+          <Route path="/exercises/new" element={<Navigate to="/trainer/exercises/new" replace />} />
+          <Route path="/exercises/:id" element={<ParamRedirect to={(p) => `/trainer/exercises/${p.id}`} />} />
+          <Route path="/bundles" element={<Navigate to="/trainer/bundles" replace />} />
+          <Route path="/bundles/new" element={<Navigate to="/trainer/bundles/new" replace />} />
+          <Route path="/bundles/:id" element={<ParamRedirect to={(p) => `/trainer/bundles/${p.id}`} />} />
+          <Route path="/trainees" element={<Navigate to="/trainer/trainees" replace />} />
+
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>
@@ -204,6 +230,11 @@ function Shell() {
       </nav>
     </div>
   );
+}
+
+function ParamRedirect({ to }: { to: (p: Readonly<Record<string, string | undefined>>) => string }) {
+  const params = useParams();
+  return <Navigate to={to(params)} replace />;
 }
 
 function TabLink({ to, icon, label, end }: { to: string; icon: string; label: string; end?: boolean }) {
