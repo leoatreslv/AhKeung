@@ -117,6 +117,14 @@ begin
   );
 end $$;
 
+-- CREATE OR REPLACE FUNCTION does not reset grants, so the existing
+-- grant from 0004:30-31 (`grant execute on ... to authenticated`) is
+-- preserved. Re-declaring it here is a no-op but makes the spec
+-- explicit and protects against future migrations that recreate the
+-- function in a way that does reset grants.
+revoke execute on function public.promote_to_trainer(uuid) from public;
+grant  execute on function public.promote_to_trainer(uuid) to authenticated;
+
 -- 7. New: promote_to_admin RPC (admin-only), with matching audit emit.
 create or replace function public.promote_to_admin(target uuid)
   returns void
@@ -173,24 +181,29 @@ create policy audit_events_read on audit_events for select using (
   )
 );
 
--- 10. designate_invited_user RPC: guard switches from is_trainer to
---     is_admin. The RPC inserts trainer_trainees with caller=trainer_id,
---     which would be wrong if an admin called it (they'd become the
---     trainee's trainer). Two options were considered:
+-- 10. designate_invited_user RPC dropped. Lineage: introduced in
+--     0011, redefined in 0012 to also stamp invitations.designated_at
+--     on the ON CONFLICT path. Inserts trainer_trainees with
+--     caller=trainer_id, which would be wrong if an admin called it
+--     (they'd become the trainee's trainer). Two options considered:
 --       (a) drop the RPC entirely and remove the "Designate from
 --           invitation" path; admin sees an informational "awaiting
 --           designation" list, trainer designates via search only.
 --       (b) keep but rework the signature to accept a target trainer_id.
 --     The spec picks (a) — simpler, removes a dead path, and surfaces
 --     orphaned invitees as an actionable signal for admin to ping a
---     trainer. The trainer's existing search-based designation flow
---     (preserved in MyTrainees) is unchanged.
+--     trainer. The trainer's existing search-based designation flow in
+--     MyTrainees (preserved) still triggers the 0012 AFTER INSERT
+--     trigger to stamp invitations.designated_at, so that bookkeeping
+--     is not lost.
 drop function if exists public.designate_invited_user(uuid);
--- (No replacement created. AdminInvites' "awaiting designation" list is
---  read-only. Trainer designates the existing user via search.)
 ```
 
 **Triggers verified unaffected:** `0010` (`mark_invitation_accepted` on `auth.users INSERT`), `0012` (`trainer_trainees_mark_invitation_designated` AFTER INSERT), `0008` audit triggers, and the `cascade_exercise_soft_delete` trigger from 0004 all key off columns the spec does not touch.
+
+**`handle_new_user()` (0001:69-79):** still inserts `(id, display_name, is_trainer)` only — new `is_admin` column picks up its `default false`. The trigger is not rewritten in this migration; new signups land with `is_admin = false`, which is correct. If we ever want admins seeded programmatically (e.g. via `raw_user_meta_data.bootstrap_admin`), update the trigger in a follow-up migration.
+
+**Audit attribution after admin-only invites:** `audit_invitations_insert` (0008:95-108) and `audit_invitations_update` (0008:115-140) both stamp `inviter_id` as the audit actor. Post-migration, every `inviter_id` is the admin's id (since only admins can INSERT into `invitations` via the Edge Function). This is intentional and correct — the admin *is* the inviter — but it does mean historical "which trainer originally surfaced this user" cannot be reconstructed from `audit_events` alone. If we want that link, store it in `invitations.metadata` at invite time. Out of scope for this spec; documented here so it's a conscious choice.
 
 ### Edge function `invite-user`
 
@@ -200,7 +213,10 @@ The role check inside `supabase/functions/invite-user/index.ts` (the `userClient
 
 - `src/sync/mapping.ts` — add `is_admin` to the `profiles` allowlist so the pull worker hydrates it.
 - `src/auth/useAuth.ts` — `interface Profile { isAdmin: boolean }` added.
-- `src/auth/AuthProvider.tsx` — `select` includes `is_admin`; mapper sets `profile.isAdmin = row.is_admin`.
+- `src/auth/AuthProvider.tsx`:
+  - Line 25 `select('id, display_name, is_trainer')` → `select('id, display_name, is_trainer, is_admin')`.
+  - Line 34 mapper picks up `isAdmin: row.is_admin`.
+  - **Cache hydration (line 164–167):** the cached profile in `localStorage['ahKeung.lastKnownProfile']` was written under the old shape and will be missing `isAdmin` when an existing user boots offline after this deploy. Read path must default the missing field: `profile = { ...parsed, isAdmin: parsed.isAdmin ?? false }`. Equivalent: bump the cache key to `'ahKeung.lastKnownProfile.v2'` so stale caches are ignored. Either approach is fine; prefer the defaulting one (no UX hit for the brief window between deploy and next online fetch).
 
 ### Other client call sites touched by the migration
 
@@ -222,8 +238,10 @@ These were missed in the first draft of this spec; the second review flagged the
 
 The reviewer flagged that several test files build stub profiles without `isAdmin`. After the `Profile` shape changes, TypeScript will catch most of these, but the stub helpers still need explicit support:
 
-- `src/test/fakeSupabase.ts` — around lines 216 (default profile insert) and 222–224 (`setTrainer` helper): add `is_admin: false` to the default and add a `setAdmin(userId, value)` mirror of `setTrainer`.
-- `src/test/authStub.ts` — add `isAdmin?: boolean` to `Opts` and wire to `fake.setAdmin(...)` when truthy.
+- `src/test/fakeSupabase.ts:216` — default profile insert: add `is_admin: false` to the row literal.
+- `src/test/fakeSupabase.ts:222–224` — `setTrainer(userId, isTrainer)` helper: add a mirror `setAdmin(userId, isAdmin)` immediately after, writing `p.is_admin = isAdmin`.
+- `src/test/authStub.ts:8` — `Opts` interface gains `isAdmin?: boolean`.
+- `src/test/authStub.ts:12` — add `if (opts.isAdmin) fake.setAdmin(opts.id, true);` right after the existing `if (opts.isTrainer)` line.
 - `src/test/invitations.test.ts`, `src/test/sharing.test.tsx`, `src/test/exerciseEditor.test.tsx`, `src/test/roundtrip.test.ts`, `src/sync/imageUploadSweep.test.ts` — wherever a stub profile is built, decide whether the test asserts admin behavior. Default to `isAdmin: false` unless it does.
 
 ### RLS / migration tests
@@ -246,7 +264,8 @@ type Mode = 'trainee' | 'trainer' | 'admin';
 interface RoleModeContext {
   mode: Mode;
   availableModes: Mode[];   // ['trainee'] | ['trainee','trainer'] | ['trainee','trainer','admin'] | ['trainee','admin']
-  setMode: (m: Mode) => void;
+  setMode: (m: Mode) => void;          // explicit user action (ModeSwitcher) — persists to localStorage
+  setModeTransient: (m: Mode) => void; // implicit re-routing (ModeGate) — in-memory only, no persistence
 }
 
 const STORAGE_KEY = 'ahkeung:roleMode';
@@ -257,6 +276,7 @@ const STORAGE_KEY = 'ahkeung:roleMode';
 - `availableModes` derived from `profile.isTrainer` and `profile.isAdmin`. `'trainee'` is always present. Recomputed on every render (cheap — two booleans).
 - Initial mode: read `localStorage[STORAGE_KEY]`; if missing or not in `availableModes`, fall back to `'trainee'`.
 - `setMode(m)` updates state and writes to localStorage. If `m ∉ availableModes`, no-op.
+- `setModeTransient(m)` updates state only (no localStorage write). If `m ∉ availableModes`, no-op. Used by `ModeGate` so deep-linking into another mode doesn't quietly change the user's saved preference.
 - **Mid-session role change:** an `useEffect` watches `availableModes`. If the active `mode` is no longer in `availableModes` (e.g. an admin demoted you while you were in admin mode and a pull-sync brought the new profile down), reset `mode` to `'trainee'` and clear the localStorage key. Avoids a stuck state where the user is "in" a mode they no longer have permission for and `ModeGate` redirects every page.
 - Mounted inside `<Guarded>` above `<Shell>` — only available when `fullyReady`.
 
@@ -284,8 +304,19 @@ Wraps a route element:
 
 Behavior:
 - If `mode ∈ allowedIn` → render children.
-- Else if any mode in `allowedIn` is in `availableModes` → call `setMode` with the first matching mode and re-render. **This auto-switch persists to localStorage** (uses the same `setMode` path as the switcher), so a user who deep-links into a different mode finds themselves "left" in that mode on next session — matches the "last used" default-mode preference picked in brainstorming.
+- Else if any mode in `allowedIn` is in `availableModes` → call `setModeTransient` (NOT `setMode`) with the first matching mode and re-render. The new `setModeTransient` is a sibling on the context that updates state **without writing to localStorage** — so a deep link (tutorial / screenshot / saved bookmark in a different mode) does not silently mutate the user's saved mode preference. Persistence is reserved for explicit `ModeSwitcher` taps.
 - Else → `<Navigate to="/" replace />`.
+
+The `RoleModeContext` therefore exposes both `setMode` (persistent, called by the switcher) and `setModeTransient` (in-memory only, called by `ModeGate`):
+
+```ts
+interface RoleModeContext {
+  mode: Mode;
+  availableModes: Mode[];
+  setMode: (m: Mode) => void;          // writes localStorage
+  setModeTransient: (m: Mode) => void; // does not write localStorage
+}
+```
 
 ### `src/App.tsx` modifications
 
@@ -321,6 +352,20 @@ Legacy URL redirects (so saved bookmarks don't 404):
 - `/bundles/new` → `/trainer/bundles/new`
 - `/bundles/:id` → `/trainer/bundles/:id`
 - `/trainees` → `/trainer/trainees`
+
+**In-app callers using old paths must be rewritten in the same PR** (otherwise every click would silently bounce through a legacy redirect AND through ModeGate auto-switch). These were missed in the first draft:
+
+| File | Line | Old | New |
+|---|---|---|---|
+| `src/pages/Settings.tsx` | 105 | `to="/exercises"` | (grid is removed — see Settings section) |
+| `src/pages/Settings.tsx` | 112 | `to="/bundles"` | (grid is removed) |
+| `src/pages/Settings.tsx` | 119 | `to="/trainees"` | (grid is removed) |
+| `src/pages/MyExercises.tsx` | 49 | `to="/exercises/new"` | `to="/trainer/exercises/new"` |
+| `src/pages/MyBundles.tsx` | 61 | `to="/bundles/new"` | `to="/trainer/bundles/new"` |
+| `src/pages/ExerciseEditor.tsx` | 104, 121, 128 | `navigate('/exercises')` | `navigate('/trainer/exercises')` |
+| `src/pages/BundleEditor.tsx` | 97, 111, 118 | `navigate('/bundles')` | `navigate('/trainer/bundles')` |
+
+(Verified with `grep "to=\"/exercises\"\|to=\"/bundles\"\|to=\"/trainees\"\|navigate('/exercises\|navigate('/bundles\|navigate('/trainees"` over `src/`.) Legacy URL redirects remain as a safety net for external bookmarks, but in-app navigation goes direct to the new paths.
 
 ## Per-mode page inventory
 
@@ -382,7 +427,7 @@ Tab order (left → right) matches the option you approved in brainstorming. **D
   - "Promote to Trainer" (if `!isTrainer`) → `promote_to_trainer(id)` RPC via the existing `sharing.ts` helper (caller moves here from `MyTrainees`' `PromoteButton`).
   - "Promote to Admin" (if `!isAdmin`) → `promote_to_admin(id)` RPC.
 - Both actions confirm via `window.confirm` before firing.
-- After success, reuse the existing `useIsTrainer` cache write-through (`setIsTrainerCache(id, true)`) for trainer promotion; mirror it with a new `setIsAdminCache(id, true)` if we add a parallel `useIsAdmin` hook (only needed if multiple components want a fresh read — otherwise just refetch the local `profiles` Dexie row).
+- After success, reuse the existing `useIsTrainer` cache write-through (`setIsTrainerCache(id, true)`) for trainer promotion. For admin promotion, refetch the local `profiles` Dexie row and update the badge — no dedicated `useIsAdmin` hook is needed (the AdminUsers row is the only consumer; the existing trainer hook only exists because PromoteButton was used in many places, which is no longer true). If we ever add multiple consumers, mirror the pattern: `useIsAdmin` reads `profiles.is_admin` directly via the now-widened `profiles_read` RLS (admins can read all profiles), not via a separate view like `trainer_names`.
 
 **`AdminAudit` (new):**
 
@@ -392,10 +437,12 @@ Tab order (left → right) matches the option you approved in brainstorming. **D
 
 ### Settings (cross-mode)
 
-- Remove the "Trainer tools" grid (those pages now live in trainer-mode nav).
-- Show a **role badge stack** in the header row: `Trainee` (always) + `Trainer` (if `isTrainer`) + `Admin` (if `isAdmin`). Color-coded.
-- Keep: display name editor, Your Trainers list, Change Password, Diagnostics, Sign Out.
-- Stays accessible from any mode via the cog in the header.
+Two precise rewrites in `src/pages/Settings.tsx`:
+
+- **Lines 76–80** (single `Trainer` badge pill in the header row) → replace with the new role badge stack: `Trainee` (always shown, slate) + `Trainer` (if `isTrainer`, keung-green) + `Admin` (if `isAdmin`, amber). Same chip style as today, just multiple chips.
+- **Lines 100–127** (the `profile?.isTrainer && (...)` block containing the "Trainer tools" grid linking to `/exercises`, `/bundles`, `/trainees`) → delete entirely. Those pages now live in the trainer-mode bottom nav; reaching them via Settings is redundant.
+
+Everything else in Settings is unchanged: display name editor, Your Trainers list, Change Password, Diagnostics, Sign Out. Page stays accessible from any mode via the cog in the header.
 
 ## Localization
 
@@ -415,7 +462,8 @@ New i18n strings (both `en` and `zh-Hant`):
 ### Unit
 - `RoleMode` provider: stored mode honored; invalid stored mode falls back to `'trainee'`; `setMode` with mode not in `availableModes` is a no-op; **reactive reset when `availableModes` shrinks mid-session**.
 - `ModeSwitcher` renders only when `availableModes.length > 1`; renders only the available pills; tapping a pill navigates to `DEFAULT_ROUTE_BY_MODE[m]`.
-- `ModeGate` renders children when in-mode; auto-switches mode if available (and persists to localStorage); redirects to `/` otherwise.
+- `ModeGate` renders children when in-mode; auto-switches via `setModeTransient` (**asserts localStorage is NOT written** — guards against accidentally calling `setMode`) if any `allowedIn` is in `availableModes`; redirects `<Navigate to="/" replace />` when no `allowedIn` mode is available.
+- `lastKnownProfile` cache rehydration: a v1-shaped cache (no `isAdmin` field) is read as `isAdmin: false` rather than crashing or returning `undefined`.
 - `AdminUsers` promote buttons hit the right RPC and update local cache on success.
 - `TrainerDashboard` lists the same pending designations that the old `MyTrainees` showed.
 
@@ -445,10 +493,11 @@ Single PR is fine — the change is large but tightly coupled.
 
 - **Window between steps 3 and 4:** A non-Leo trainer who tries to invite during this gap gets 403. *Mitigation:* audit log shows only Leo has sent invites historically; the window is effectively risk-free.
 - **Surprise switcher for promoted users:** A user marked both trainer and trainee suddenly sees a mode switcher in the header. *Mitigation:* localStorage starts blank → defaults to `'trainee'` → same UI as before unless they tap. Discoverable, not disruptive.
-- **Direct URL into wrong mode:** Caught by `ModeGate` — auto-switches (and persists the new mode) or redirects to `/`. No 404, no error scream.
+- **Direct URL into wrong mode:** Caught by `ModeGate` — auto-switches **transiently** (in-memory only; the user's persisted mode preference is untouched) or redirects to `/`. No 404, no error scream.
 - **Mode/URL drift:** User in trainer mode flips to trainee mode while on `/trainer/trainees`. `ModeGate` redirects to `/`. Acceptable: mode switching is an explicit user action.
 - **Mid-edit mode switch destroys unsaved state:** Tapping the mode switcher while inside `PlanEditor` / `ExerciseEditor` / `BundleEditor` discards in-progress edits silently. Same behavior as tapping a bottom-nav tab mid-edit today. *Mitigation:* none in this spec — adding an unsaved-changes guard is out of scope. Flagged here so it's an acknowledged limitation, not a surprise.
 - **Mid-session role demotion:** If an admin demotes a user while that user is logged in in admin/trainer mode, the next pull-sync brings down `isAdmin=false`/`isTrainer=false`. *Mitigation:* `RoleModeProvider`'s effect (see Shell architecture) detects the change and falls back to `'trainee'` mode, clearing localStorage. No stuck-on-redirect loop.
+- **Two tabs in different modes:** localStorage writes from one tab do not auto-propagate to React state in the other tab. A user with the app open in two tabs (Tab A in Trainer mode, Tab B in Admin mode) keeps each tab in its in-memory mode until that tab reloads or the user clicks the switcher there. Acceptable for this PWA — the modes are workspaces, not session state — but documented so it doesn't get reported as a bug. If we ever want cross-tab sync, add a `storage` event listener in `RoleModeProvider`.
 - **Non-risk — sync:** `is_admin` is a column on `profiles`, already synced by the existing pull worker (after the mapping allowlist update). Nothing else changes in sync.
 
 ## Out of scope
