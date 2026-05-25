@@ -144,38 +144,48 @@ function resolveLabel(t: Translation, key: string): string {
 function Shell() {
   const { t, locale } = useI18n();
   const { profile, user } = useAuth();
-  const { mode } = useRoleMode();
+  const { mode, availableModes } = useRoleMode();
   // Prefer the saved display name; fall back to the local-part of email so
   // the user always sees *something* about themselves in the header rather
   // than just the app name. Locale-aware greeting so it doesn't say "Hi,"
   // in a Chinese UI.
   const name = profile?.displayName?.trim() || user?.email?.split('@')[0] || '';
   const greeting = locale === 'zh-Hant' ? `${name} 你好` : `Hi, ${name}`;
+  const showSwitcherRow = availableModes.length > 1;
   return (
     <div className="flex flex-col h-full max-w-md mx-auto bg-slate-900 text-slate-100">
-      <header
+      {/* Header zone: title row + optional mode-switcher row, sticky together.
+          The mode tint lives on the *zone*, so the border sits below whichever
+          row is last (header alone for single-role, switcher row for multi-role). */}
+      <div
         className={
-          'px-4 pt-6 pb-3 border-b flex items-center gap-2 sticky top-0 z-10 bg-slate-900/95 backdrop-blur ' +
+          'sticky top-0 z-10 bg-slate-900/95 backdrop-blur border-b ' +
           (mode === 'trainer' ? 'border-keung-600/60' : mode === 'admin' ? 'border-amber-600/60' : 'border-slate-800')
         }
       >
-        <img
-          src={`${import.meta.env.BASE_URL}logo.png`}
-          alt=""
-          className="w-9 h-9 rounded-lg object-cover ring-2 ring-keung-600"
-        />
-        <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold leading-none">{t.appName}</h1>
-          <span className="text-xs text-slate-400 truncate block">
-            {name ? greeting : t.tagline}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <LanguageSwitcher />
-          <ModeSwitcher />
-          <NavLink to="/settings" aria-label="settings" className="text-slate-300 text-xl">⚙️</NavLink>
-        </div>
-      </header>
+        <header className="px-4 pt-6 pb-3 flex items-center gap-2">
+          <img
+            src={`${import.meta.env.BASE_URL}logo.png`}
+            alt=""
+            className="w-9 h-9 rounded-lg object-cover ring-2 ring-keung-600"
+          />
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-bold leading-none">{t.appName}</h1>
+            <span className="text-xs text-slate-400 truncate block">
+              {name ? greeting : t.tagline}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <LanguageSwitcher />
+            <NavLink to="/settings" aria-label="settings" className="text-slate-300 text-xl">⚙️</NavLink>
+          </div>
+        </header>
+        {showSwitcherRow && (
+          <div className="px-4 pb-2 flex justify-center">
+            <ModeSwitcher />
+          </div>
+        )}
+      </div>
 
       <main className="flex-1 overflow-y-auto pb-20">
         <Routes>
