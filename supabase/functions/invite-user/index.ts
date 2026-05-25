@@ -2,8 +2,8 @@
 //
 // POST { email: string }
 //
-// - Verifies caller is a trainer (JWT + is_trainer RPC).
-// - Rate-limits to 10 active invites per trainer per rolling 24h
+// - Verifies caller is an admin (JWT + is_admin RPC).
+// - Rate-limits to 10 active invites per admin per rolling 24h
 //   window, serialised via pg_advisory_xact_lock to defeat the
 //   "both see 9, both insert" race.
 // - Calls supabase.auth.admin.inviteUserByEmail with the caller's id
@@ -13,8 +13,8 @@
 //   "User already registered". The function catches that, records the
 //   invitation with already_existed = true (NO accepted_at stamp —
 //   the user never accepted *this* invite; they were already in), and
-//   returns 200 so the trainer's UI can surface it as
-//   "already had an account". The trainer then designates the
+//   returns 200 so the admin's UI can surface it as
+//   "already had an account". The admin then designates the
 //   existing user via the regular search → designate path.
 //
 // Deploy:
@@ -88,9 +88,9 @@ async function handle(req: Request): Promise<Response> {
   const { data: { user }, error: userErr } = await userClient.auth.getUser();
   if (userErr || !user) return jsonResponse({ error: 'unauthenticated' }, 401);
 
-  const { data: isTrainerData, error: rpcErr } = await userClient.rpc('is_trainer');
-  if (rpcErr) return jsonResponse({ error: `is_trainer check failed: ${rpcErr.message}` }, 500);
-  if (!isTrainerData) return jsonResponse({ error: 'trainer only' }, 403);
+  const { data: isAdminData, error: rpcErr } = await userClient.rpc('is_admin');
+  if (rpcErr) return jsonResponse({ error: `is_admin check failed: ${rpcErr.message}` }, 500);
+  if (!isAdminData) return jsonResponse({ error: 'admin only' }, 403);
 
   // ─── Parse body ──────────────────────────────────────────────────
   let body: unknown;
@@ -107,8 +107,8 @@ async function handle(req: Request): Promise<Response> {
 
   // ─── Rate limit — serialise via advisory lock ────────────────────
   // The lock key is derived from the inviter's UUID so concurrent
-  // requests from the same trainer block each other but unrelated
-  // trainers don't contend. Using a transaction-scoped lock means it
+  // requests from the same admin block each other but unrelated
+  // admins don't contend. Using a transaction-scoped lock means it
   // releases when this function's connection commits/rolls back.
   const { data: lockData, error: lockErr } = await admin.rpc('invite_rate_check', {
     inviter: user.id,
@@ -122,10 +122,10 @@ async function handle(req: Request): Promise<Response> {
   // ─── Look up the inviter's display name for the email template ───
   // The template (Dashboard → Authentication → Email Templates → "Invite
   // user") can reference {{ .Data.inviter_name }} to personalise the
-  // greeting. Falls back to "your trainer" if the trainer hasn't set a
+  // greeting. Falls back to "your admin" if the admin hasn't set a
   // display name yet, or if the lookup throws/fails for any reason
   // (the invite must not 500 because we couldn't read one column).
-  let inviterName = 'your trainer';
+  let inviterName = 'your admin';
   try {
     const { data: inviterRow } = await admin.from('profiles')
       .select('display_name').eq('id', user.id).maybeSingle() as
@@ -169,7 +169,7 @@ async function handle(req: Request): Promise<Response> {
   // /recover endpoint authenticates the request via the anon apikey
   // header; a service-role apikey path can throw in some supabase-js
   // versions. Wrapped in try/catch so a recovery-email failure can
-  // NEVER 500 the function — the trainer's UI can still fall back to
+  // NEVER 500 the function — the admin's UI can still fall back to
   // asking the recipient to use "Forgot password?" themselves.
   if (alreadyExisted) {
     const origin = req.headers.get('origin') ?? req.headers.get('referer') ?? undefined;
