@@ -297,6 +297,8 @@ export interface Translation {
     failed: string;
   };
 
+  settingsBadges: { trainee: string; trainer: string; admin: string };
+
   settings: {
     changePassword: string;
     newPassword: string;

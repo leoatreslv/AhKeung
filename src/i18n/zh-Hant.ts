@@ -302,6 +302,8 @@ export const zhHant: Translation = {
     failed: '密碼儲存失敗',
   },
 
+  settingsBadges: { trainee: '學員', trainer: '教練', admin: '管理員' },
+
   settings: {
     changePassword: '更改密碼',
     newPassword: '新密碼',

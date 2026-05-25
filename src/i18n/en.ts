@@ -303,6 +303,8 @@ export const en: Translation = {
     failed: 'Couldn\'t save password',
   },
 
+  settingsBadges: { trainee: 'Trainee', trainer: 'Trainer', admin: 'Admin' },
+
   settings: {
     changePassword: 'Change password',
     newPassword: 'New password',
