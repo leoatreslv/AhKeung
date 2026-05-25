@@ -20,7 +20,7 @@
 
 -- 1. Column
 alter table profiles
-  add column is_admin boolean not null default false;
+  add column if not exists is_admin boolean not null default false;
 
 -- 2. Seed Leo as the first admin.
 update profiles p
