@@ -101,7 +101,7 @@ export function ExerciseEditor() {
     log.info(CATEGORY.exercise, id ? 'updated' : 'created', {
       id: newId, hadImage: !!pickedImage,
     });
-    navigate('/exercises');
+    navigate('/trainer/exercises');
   }
 
   async function remove() {
@@ -118,14 +118,14 @@ export function ExerciseEditor() {
     }
     await deleteWithSync('exercises', id);
     log.info(CATEGORY.exercise, 'deleted', { id, bundlesAffected: memberships.length });
-    navigate('/exercises');
+    navigate('/trainer/exercises');
   }
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-2">
         <button
-          onClick={() => navigate('/exercises')}
+          onClick={() => navigate('/trainer/exercises')}
           aria-label="back"
           className="text-slate-300 text-xl leading-none px-1"
         >←</button>

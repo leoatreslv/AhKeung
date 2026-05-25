@@ -94,7 +94,7 @@ export function BundleEditor() {
         position: i,
       }, userId);
     }
-    navigate('/bundles');
+    navigate('/trainer/bundles');
   }
 
   async function remove() {
@@ -108,14 +108,14 @@ export function BundleEditor() {
       await deleteWithSync('exerciseBundleItems', id, it.exerciseId);
     }
     await deleteWithSync('exerciseBundles', id);
-    navigate('/bundles');
+    navigate('/trainer/bundles');
   }
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-2">
         <button
-          onClick={() => navigate('/bundles')}
+          onClick={() => navigate('/trainer/bundles')}
           aria-label="back"
           className="text-slate-300 text-xl leading-none px-1"
         >←</button>

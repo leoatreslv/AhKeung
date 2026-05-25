@@ -58,7 +58,7 @@ export function MyBundles() {
         <button onClick={() => navigate('/settings')} aria-label="back" className="text-slate-300 text-xl leading-none px-1">←</button>
         <h2 className="text-lg font-bold flex-1">{t.myBundles.title}</h2>
         <Link
-          to="/bundles/new"
+          to="/trainer/bundles/new"
           className="bg-keung-600 hover:bg-keung-700 text-white px-3 py-1.5 rounded-lg text-sm font-semibold"
         >
           {t.myBundles.newButton}
