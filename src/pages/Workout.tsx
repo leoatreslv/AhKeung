@@ -185,13 +185,13 @@ export function Workout() {
                       step={0.5}
                       value={s.weight}
                       onChange={(e) => updateSet(exIdx, setIdx, { weight: Number(e.target.value) })}
-                      className={`bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                      className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
                     />
                     <input
                       type="number"
                       value={s.reps}
                       onChange={(e) => updateSet(exIdx, setIdx, { reps: Number(e.target.value) })}
-                      className={`bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                      className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
                     />
                     <button
                       onClick={() => updateSet(exIdx, setIdx, { done: !s.done })}
