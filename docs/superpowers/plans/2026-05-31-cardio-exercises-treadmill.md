@@ -19,7 +19,7 @@
 ### Task 1: Extend the data model types (`src/db.ts`)
 
 **Files:**
-- Modify: `src/db.ts:14-21` (`Exercise`/`CustomExercise`), `src/db.ts:23-29` (`PlanExercise`), `src/db.ts:57-61` (`SetLog`)
+- Modify: `src/db.ts:88-103` (`CustomExercise`), `src/db.ts:23-29` (`PlanExercise`), `src/db.ts:57-61` (`SetLog`)
 
 - [ ] **Step 1: Add `kind` to `CustomExercise`**
 
@@ -351,7 +351,7 @@ git commit -m "sync: carry exercise kind inbound/outbound, drop is_global"
 
 **Files:**
 - Modify: `src/i18n/types.ts` (add `cardio` to the translations interface, after the `workout` block)
-- Modify: `src/i18n/en.ts` (after the `workout: { ... }` block, ~`src/i18n/en.ts:89`)
+- Modify: `src/i18n/en.ts` (the `workout: { ... }` block opens ~`:89` and closes ~`:101`; insert after its closing `},`)
 - Modify: `src/i18n/zh-Hant.ts` (matching block)
 
 - [ ] **Step 1: Add the type**
@@ -393,7 +393,7 @@ In `src/i18n/zh-Hant.ts`, in the matching position after its `workout` block, ad
 - [ ] **Step 4: Typecheck + i18n parity test**
 
 Run: `npx tsc -b --noEmit && npx vitest run src/test/i18n.test.tsx`
-Expected: PASS — both locales now satisfy the `cardio` shape; the parity test (key-set equality) passes.
+Expected: PASS. **TypeScript** is what enforces locale parity here — both `en` and `zh-Hant` are typed `: Translation`, so omitting `cardio` from either fails `tsc`. (Note: `i18n.test.tsx` only checks `appName` + `muscleGroup` labels, not full key-set equality, so don't rely on vitest alone to catch a missing key.)
 
 - [ ] **Step 5: Commit**
 
