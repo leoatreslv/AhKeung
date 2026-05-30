@@ -100,6 +100,12 @@ export const zhHant: Translation = {
     addExerciseTitle: '加入動作',
   },
 
+  cardio: {
+    incline: '坡度 (%)',
+    speed: '速度 (km/h)',
+    time: '時間 (分鐘)',
+  },
+
   library: {
     searchPlaceholder: '搜尋動作…',
     noMatch: '找不到符合的動作。',

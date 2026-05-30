@@ -97,6 +97,12 @@ export interface Translation {
     addExerciseTitle: string;
   };
 
+  cardio: {
+    incline: string;
+    speed: string;
+    time: string;
+  };
+
   library: {
     searchPlaceholder: string;
     noMatch: string;
