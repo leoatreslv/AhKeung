@@ -10,6 +10,7 @@ import { useFavoriteIds } from '../useFavorites';
 import { ExerciseDetailsModal } from '../components/ExerciseDetailsModal';
 import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { putWithSync } from '../sync/putWithSync';
+import { exerciseKind, nextSet, setsFromPlanExercise, secondsToMinutes, minutesToSeconds } from '../cardio';
 
 export function Workout() {
   const { t, locale } = useI18n();
@@ -31,7 +32,7 @@ export function Workout() {
   const [startedAt] = useState(() => Date.now());
   const [date] = useState(() => todayISO());
 
-  if (session === null && (!planId || plan)) {
+  if (session === null && (!planId || plan) && catalog) {
     setSession({
       planId: plan?.id,
       date,
@@ -39,11 +40,7 @@ export function Workout() {
       exercises:
         plan?.exercises.map((pe) => ({
           exerciseId: pe.exerciseId,
-          sets: Array.from({ length: pe.targetSets }, () => ({
-            reps: pe.targetReps,
-            weight: pe.targetWeight ?? 0,
-            done: false,
-          })),
+          sets: setsFromPlanExercise(pe, exerciseKind(catalog.find((c) => c.id === pe.exerciseId))),
         })) ?? [],
     });
   }
@@ -73,9 +70,9 @@ export function Workout() {
     setSession((s) => {
       if (!s) return s;
       const ex = s.exercises[exIdx];
+      const kind = exerciseKind(findEx(ex.exerciseId));
       const last = ex.sets[ex.sets.length - 1];
-      const newSet: SetLog = { reps: last?.reps ?? 10, weight: last?.weight ?? 0, done: false };
-      return { ...s, exercises: s.exercises.map((e, i) => (i === exIdx ? { ...e, sets: [...e.sets, newSet] } : e)) };
+      return { ...s, exercises: s.exercises.map((e, i) => (i === exIdx ? { ...e, sets: [...e.sets, nextSet(last, kind)] } : e)) };
     });
   };
 
@@ -90,9 +87,10 @@ export function Workout() {
 
   const addExercise = (id: string) => {
     if (session.exercises.find((e) => e.exerciseId === id)) return;
+    const kind = exerciseKind(findEx(id));
     setSession((s) => s && {
       ...s,
-      exercises: [...s.exercises, { exerciseId: id, sets: [{ reps: 10, weight: 0, done: false }] }],
+      exercises: [...s.exercises, { exerciseId: id, sets: [nextSet(undefined, kind)] }],
     });
     setPickerOpen(false);
   };
@@ -146,6 +144,7 @@ export function Workout() {
           const meta = findEx(ex.exerciseId);
           const name = meta ? displayName(meta, locale) : ex.exerciseId;
           const img = meta ? imageUrl(meta.imagePath, meta.updatedAt) : null;
+          const kind = exerciseKind(meta);
           return (
             <li key={ex.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
               <div className="p-3 flex items-center gap-2 border-b border-slate-700">
@@ -170,43 +169,96 @@ export function Workout() {
                 <button onClick={() => removeExercise(exIdx)} className="text-slate-500 hover:text-rose-400">✕</button>
               </div>
               <div className="px-3 py-2">
-                <div className="grid grid-cols-[2rem_1fr_1fr_2.5rem_1.5rem] gap-2 items-center text-[10px] text-slate-400 uppercase tracking-wide mb-1">
-                  <span>{t.workout.set}</span>
-                  <span>{t.workout.weightUnit}</span>
-                  <span>{t.planEditor.reps}</span>
-                  <span>{t.common.done}</span>
-                  <span></span>
-                </div>
-                {ex.sets.map((s, setIdx) => (
-                  <div key={setIdx} className="grid grid-cols-[2rem_1fr_1fr_2.5rem_1.5rem] gap-2 items-center py-1">
-                    <span className="text-sm font-bold text-slate-400">{setIdx + 1}</span>
-                    <input
-                      type="number"
-                      step={0.5}
-                      value={s.weight}
-                      onChange={(e) => updateSet(exIdx, setIdx, { weight: Number(e.target.value) })}
-                      className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
-                    />
-                    <input
-                      type="number"
-                      value={s.reps}
-                      onChange={(e) => updateSet(exIdx, setIdx, { reps: Number(e.target.value) })}
-                      className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
-                    />
-                    <button
-                      onClick={() => updateSet(exIdx, setIdx, { done: !s.done })}
-                      className={`rounded h-8 text-sm font-bold ${s.done ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
-                    >
-                      {s.done ? '✓' : '○'}
-                    </button>
-                    <button
-                      onClick={() => removeSet(exIdx, setIdx)}
-                      className="text-slate-500 hover:text-rose-400 text-sm"
-                    >
-                      −
-                    </button>
-                  </div>
-                ))}
+                {kind === 'cardio' ? (
+                  <>
+                    <div className="grid grid-cols-[2rem_1fr_1fr_1fr_2.5rem_1.5rem] gap-2 items-center text-[10px] text-slate-400 uppercase tracking-wide mb-1">
+                      <span>{t.workout.set}</span>
+                      <span>{t.cardio.incline}</span>
+                      <span>{t.cardio.speed}</span>
+                      <span>{t.cardio.time}</span>
+                      <span>{t.common.done}</span>
+                      <span></span>
+                    </div>
+                    {ex.sets.map((s, setIdx) => (
+                      <div key={setIdx} className="grid grid-cols-[2rem_1fr_1fr_1fr_2.5rem_1.5rem] gap-2 items-center py-1">
+                        <span className="text-sm font-bold text-slate-400">{setIdx + 1}</span>
+                        <input
+                          type="number"
+                          step={0.5}
+                          value={s.inclinePct ?? 0}
+                          onChange={(e) => updateSet(exIdx, setIdx, { inclinePct: Number(e.target.value) })}
+                          className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                        />
+                        <input
+                          type="number"
+                          step={0.1}
+                          value={s.speedKmh ?? 0}
+                          onChange={(e) => updateSet(exIdx, setIdx, { speedKmh: Number(e.target.value) })}
+                          className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                        />
+                        <input
+                          type="number"
+                          step={0.5}
+                          value={secondsToMinutes(s.durationSec)}
+                          onChange={(e) => updateSet(exIdx, setIdx, { durationSec: minutesToSeconds(Number(e.target.value)) })}
+                          className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                        />
+                        <button
+                          onClick={() => updateSet(exIdx, setIdx, { done: !s.done })}
+                          className={`rounded h-8 text-sm font-bold ${s.done ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                        >
+                          {s.done ? '✓' : '○'}
+                        </button>
+                        <button
+                          onClick={() => removeSet(exIdx, setIdx)}
+                          className="text-slate-500 hover:text-rose-400 text-sm"
+                        >
+                          −
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-[2rem_1fr_1fr_2.5rem_1.5rem] gap-2 items-center text-[10px] text-slate-400 uppercase tracking-wide mb-1">
+                      <span>{t.workout.set}</span>
+                      <span>{t.workout.weightUnit}</span>
+                      <span>{t.planEditor.reps}</span>
+                      <span>{t.common.done}</span>
+                      <span></span>
+                    </div>
+                    {ex.sets.map((s, setIdx) => (
+                      <div key={setIdx} className="grid grid-cols-[2rem_1fr_1fr_2.5rem_1.5rem] gap-2 items-center py-1">
+                        <span className="text-sm font-bold text-slate-400">{setIdx + 1}</span>
+                        <input
+                          type="number"
+                          step={0.5}
+                          value={s.weight}
+                          onChange={(e) => updateSet(exIdx, setIdx, { weight: Number(e.target.value) })}
+                          className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                        />
+                        <input
+                          type="number"
+                          value={s.reps}
+                          onChange={(e) => updateSet(exIdx, setIdx, { reps: Number(e.target.value) })}
+                          className={`w-full min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm ${s.done ? 'opacity-60' : ''}`}
+                        />
+                        <button
+                          onClick={() => updateSet(exIdx, setIdx, { done: !s.done })}
+                          className={`rounded h-8 text-sm font-bold ${s.done ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                        >
+                          {s.done ? '✓' : '○'}
+                        </button>
+                        <button
+                          onClick={() => removeSet(exIdx, setIdx)}
+                          className="text-slate-500 hover:text-rose-400 text-sm"
+                        >
+                          −
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
                 <button
                   onClick={() => addSet(exIdx)}
                   className="w-full mt-1 py-1.5 border border-dashed border-slate-700 text-xs text-slate-400 rounded"
