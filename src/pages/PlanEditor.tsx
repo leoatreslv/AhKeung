@@ -19,6 +19,7 @@ import { useCurrentUserId } from '../auth/useCurrentUserId';
 import { useAuth } from '../auth/useAuth';
 import { putWithSync, deleteWithSync } from '../sync/putWithSync';
 import { sharePlan } from '../sharing';
+import { exerciseKind, defaultPlanExercise, secondsToMinutes, minutesToSeconds } from '../cardio';
 
 const ALL_GROUPS: MuscleGroup[] = [
   'chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'glutes', 'core', 'cardio',
@@ -69,10 +70,8 @@ export function PlanEditor() {
 
   const addExercise = (exId: string) => {
     if (planExercises.find((p) => p.exerciseId === exId)) return;
-    setPlanExercises((arr) => [
-      ...arr,
-      { exerciseId: exId, targetSets: 3, targetReps: 10 },
-    ]);
+    const kind = exerciseKind(findEx(exId));
+    setPlanExercises((arr) => [...arr, defaultPlanExercise(exId, kind)]);
     setPickerOpen(false);
   };
 
@@ -165,6 +164,7 @@ export function PlanEditor() {
               const ex = findEx(pe.exerciseId);
               const exName = ex ? displayName(ex, locale) : pe.exerciseId;
               const img = ex ? imageUrl(ex.imagePath, ex.updatedAt) : null;
+              const kind = exerciseKind(ex);
               return (
                 <li key={pe.exerciseId} className="bg-slate-800 rounded-xl border border-slate-700 p-3">
                   <div className="flex items-start gap-2 mb-2">
@@ -198,39 +198,74 @@ export function PlanEditor() {
                       ✕
                     </button>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <label className="text-slate-400 block">{t.planEditor.sets}</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={pe.targetSets}
-                        onChange={(e) => updateExercise(pe.exerciseId, { targetSets: Number(e.target.value) })}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
-                      />
+                  {kind === 'cardio' ? (
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <label className="text-slate-400 block">{t.cardio.incline}</label>
+                        <input
+                          type="number"
+                          step={0.5}
+                          value={pe.targetInclinePct ?? ''}
+                          onChange={(e) => updateExercise(pe.exerciseId, { targetInclinePct: e.target.value ? Number(e.target.value) : undefined })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block">{t.cardio.speed}</label>
+                        <input
+                          type="number"
+                          step={0.1}
+                          value={pe.targetSpeedKmh ?? ''}
+                          onChange={(e) => updateExercise(pe.exerciseId, { targetSpeedKmh: e.target.value ? Number(e.target.value) : undefined })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block">{t.cardio.time}</label>
+                        <input
+                          type="number"
+                          step={0.5}
+                          value={pe.targetDurationSec ? secondsToMinutes(pe.targetDurationSec) : ''}
+                          onChange={(e) => updateExercise(pe.exerciseId, { targetDurationSec: e.target.value ? minutesToSeconds(Number(e.target.value)) : undefined })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-slate-400 block">{t.planEditor.reps}</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={pe.targetReps}
-                        onChange={(e) => updateExercise(pe.exerciseId, { targetReps: Number(e.target.value) })}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
-                      />
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <label className="text-slate-400 block">{t.planEditor.sets}</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={pe.targetSets}
+                          onChange={(e) => updateExercise(pe.exerciseId, { targetSets: Number(e.target.value) })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block">{t.planEditor.reps}</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={pe.targetReps}
+                          onChange={(e) => updateExercise(pe.exerciseId, { targetReps: Number(e.target.value) })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-400 block">{t.planEditor.weightKg}</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.5}
+                          value={pe.targetWeight ?? ''}
+                          onChange={(e) => updateExercise(pe.exerciseId, { targetWeight: e.target.value ? Number(e.target.value) : undefined })}
+                          className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-slate-400 block">{t.planEditor.weightKg}</label>
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.5}
-                        value={pe.targetWeight ?? ''}
-                        onChange={(e) => updateExercise(pe.exerciseId, { targetWeight: e.target.value ? Number(e.target.value) : undefined })}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1"
-                      />
-                    </div>
-                  </div>
+                  )}
                 </li>
               );
             })}
