@@ -14,7 +14,7 @@ const INBOUND_FIELDS: Record<string, Set<string>> = {
   // Keys are the *client* (camelCase Dexie) table names — matches the
   // argument pullWorker passes to fromServerRow().
   exercises: new Set(['id', 'owner_id', 'name_en', 'name_zh', 'muscle_group',
-                      'equipment', 'instructions', 'image_path',
+                      'kind', 'equipment', 'instructions', 'image_path',
                       'created_at', 'updated_at', 'deleted_at']),
   exerciseBundles: new Set(['id', 'owner_id', 'name', 'description',
                             'created_at', 'updated_at', 'deleted_at']),

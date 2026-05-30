@@ -69,3 +69,19 @@ describe('mapping', () => {
     expect(typeof out.respondedAt).toBe('number');
   });
 });
+
+describe('exercise kind / is_global mapping', () => {
+  it('keeps kind and drops server-only is_global on the way in', () => {
+    const row = fromServerRow(
+      { id: 'x', owner_id: 'o', name_en: 'Treadmill', muscle_group: 'cardio', kind: 'cardio', is_global: true },
+      'exercises',
+    );
+    expect(row.kind).toBe('cardio');
+    expect(row.isGlobal).toBeUndefined();
+  });
+
+  it('sends kind on the way out', () => {
+    const out = toServerRow({ id: 'x', kind: 'cardio' });
+    expect(out.kind).toBe('cardio');
+  });
+});
