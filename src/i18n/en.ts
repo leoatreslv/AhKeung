@@ -100,6 +100,12 @@ export const en: Translation = {
     addExerciseTitle: 'Add exercise',
   },
 
+  cardio: {
+    incline: 'Incline (%)',
+    speed: 'Speed (km/h)',
+    time: 'Time (min)',
+  },
+
   library: {
     searchPlaceholder: 'Search exercises…',
     noMatch: 'No exercises match.',

@@ -26,6 +26,10 @@ export interface PlanExercise {
   targetReps: number;
   targetWeight?: number;
   notes?: string;
+  // Cardio-only targets (present when the exercise's kind is 'cardio').
+  targetInclinePct?: number;
+  targetSpeedKmh?: number;
+  targetDurationSec?: number;
 }
 
 interface SyncedRow {
@@ -58,6 +62,11 @@ export interface SetLog {
   reps: number;
   weight: number;
   done: boolean;
+  // Cardio-only (present when the exercise's kind is 'cardio'). reps/weight
+  // are left at 0 and ignored for cardio sets. durationSec stores seconds.
+  inclinePct?: number;
+  speedKmh?: number;
+  durationSec?: number;
 }
 
 export interface WorkoutSession extends OwnedRow {
@@ -90,6 +99,9 @@ export interface CustomExercise extends SyncedRow {
   nameEn: string | null;
   nameZh: string | null;
   muscleGroup: MuscleGroup;
+  /** Exercise modality. Absent/`'strength'` for legacy + all custom rows;
+   *  only the seeded global cardio exercises set `'cardio'`. Synced. */
+  kind?: 'strength' | 'cardio';
   equipment: string | null;
   instructions: string | null;
   imagePath: string | null;

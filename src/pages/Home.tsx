@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 import { useExercises } from '../useExercises';
 import { displayName } from '../exerciseDisplay';
 import { DesignationBanner } from '../components/DesignationBanner';
+import { exerciseKind, cardioSetSummary } from '../cardio';
 
 export function Home() {
   const { t, locale } = useI18n();
@@ -151,6 +152,7 @@ export function Home() {
                       ) : (
                         s.exercises.map((ex, idx) => {
                           const meta = catalog?.find((c) => c.id === ex.exerciseId);
+                          const kind = exerciseKind(meta);
                           const name = meta ? displayName(meta, locale) : ex.exerciseId;
                           const doneSets = ex.sets.filter((x) => x.done);
                           return (
@@ -164,9 +166,11 @@ export function Home() {
                               {doneSets.length > 0 && (
                                 <div className="text-xs text-slate-400 mt-0.5 tabular-nums">
                                   {doneSets
-                                    .map((set) => set.weight > 0
-                                      ? `${set.reps}×${set.weight}${t.workout.weightUnit}`
-                                      : `${set.reps}`)
+                                    .map((set) => kind === 'cardio'
+                                      ? cardioSetSummary(set)
+                                      : set.weight > 0
+                                        ? `${set.reps}×${set.weight}${t.workout.weightUnit}`
+                                        : `${set.reps}`)
                                     .join(' · ')}
                                 </div>
                               )}
